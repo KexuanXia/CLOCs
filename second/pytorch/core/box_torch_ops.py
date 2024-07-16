@@ -67,6 +67,9 @@ def second_box_decode(box_encodings, anchors, encode_angle_to_vector=False, smoo
     # xt, yt, zt, wt, lt, ht, rt = torch.split(box_encodings, 1, dim=-1)
     za = za + ha / 2
     diagonal = torch.sqrt(la**2 + wa**2)
+    # print(f"xt shape: {xt.shape}")
+    # print(f"diagonal shape: {diagonal.shape}")
+    # print(f"xa shape: {xa.shape}")
     xg = xt * diagonal + xa
     yg = yt * diagonal + ya
     zg = zt * ha + za

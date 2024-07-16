@@ -287,6 +287,7 @@ def inference_by_idx():
     with BACKEND.inference_ctx.ctx():
         dt_annos = BACKEND.inference_ctx.inference(inputs)[0]
     print("detection time:", time.time() - t)
+    dt_annos = dt_annos[0]
     dims = dt_annos['dimensions']
     num_obj = dims.shape[0]
     loc = dt_annos['location']
@@ -318,4 +319,5 @@ def main(port=16666):
     app.run(host='127.0.0.1', threaded=True, port=port)
 
 if __name__ == '__main__':
-    fire.Fire()
+    # fire.Fire()
+    main()

@@ -646,6 +646,7 @@ def eval_class(gt_annos,
     return ret_dict
 
 
+# num_parts默认值是50，为了GPU溢出，暂时改到5
 def eval_class_v3(gt_annos,
                   dt_annos,
                   current_classes,
@@ -653,7 +654,7 @@ def eval_class_v3(gt_annos,
                   metric,
                   min_overlaps,
                   compute_aos=False,
-                  num_parts=50):
+                  num_parts=5):
     """Kitti eval. support 2d/bev/3d/aos eval. support 0.5:0.05:0.95 coco AP.
     Args:
         gt_annos: dict, must from get_label_annos() in kitti_common.py
@@ -672,7 +673,6 @@ def eval_class_v3(gt_annos,
     assert len(gt_annos) == len(dt_annos)
     num_examples = len(gt_annos)
     split_parts = get_split_parts(num_examples, num_parts)
-
     rets = calculate_iou_partly(dt_annos, gt_annos, metric, num_parts)
     overlaps, parted_overlaps, total_dt_num, total_gt_num = rets
     N_SAMPLE_PTS = 41

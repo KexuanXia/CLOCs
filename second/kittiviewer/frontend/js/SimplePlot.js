@@ -41,100 +41,100 @@ function boxEdgeWithLabel(dims, locs, rots, edgewidth, color, labels, lcolor,vid
     for (var i = 0; i < dims.length; ++i) {
         let cube = new THREE.BoxGeometry(dims[i][0], dims[i][1], dims[i][2]);
         var edgeGeo = new THREE.EdgesGeometry(cube);
-        //console.log(video[i],i)
-        if (video[i] == "correct"){
-          //console.log("correct");
-          let material = new THREE.LineBasicMaterial({
-              color: "#747a74",
-              linewidth: edgewidth});
-              let edges = new THREE.LineSegments(edgeGeo, material);
-              edges.position.set(locs[i][0], locs[i][1], locs[i][2]);
-              edges.rotation.set(rots[i][0], rots[i][1], rots[i][2]);
-              var labelDiv = document.createElement( 'div' );
-              labelDiv.className = 'label';
-              labelDiv.textContent = labels[i];
-              labelDiv.style.color = lcolor;
-              // labelDiv.style.marginTop = '-1em';
-              labelDiv.style.fontSize = "150%";
-              var labelObj = new THREE.CSS2DObject( labelDiv );
-              labelObj.position.set( 0, 0, dims[i][2]/2+locs[i][2] );
-              edges.add(labelObj);
-              boxes.push(edges);
-        }
-        else if (video[i] == "wrong"){
-          let material = new THREE.LineBasicMaterial({
-              color: "#ff0000",
-              linewidth: edgewidth});
-              let edges = new THREE.LineSegments(edgeGeo, material);
-              edges.position.set(locs[i][0], locs[i][1], locs[i][2]);
-              edges.rotation.set(rots[i][0], rots[i][1], rots[i][2]);
-              var labelDiv = document.createElement( 'div' );
-              labelDiv.className = 'label';
-              labelDiv.textContent = labels[i];
-              labelDiv.style.color = lcolor;
-              // labelDiv.style.marginTop = '-1em';
-              labelDiv.style.fontSize = "150%";
-              var labelObj = new THREE.CSS2DObject( labelDiv );
-              labelObj.position.set( 0, 0, dims[i][2]/2+locs[i][2] );
-              edges.add(labelObj);
-              boxes.push(edges);
-        }
-        else if (video[i] == "miss"){
-          let material = new THREE.LineBasicMaterial({
-              color: "#000aff",
-              linewidth: edgewidth});
-              let edges = new THREE.LineSegments(edgeGeo, material);
-              edges.position.set(locs[i][0], locs[i][1], locs[i][2]);
-              edges.rotation.set(rots[i][0], rots[i][1], rots[i][2]);
-              var labelDiv = document.createElement( 'div' );
-              labelDiv.className = 'label';
-              labelDiv.textContent = labels[i];
-              labelDiv.style.color = lcolor;
-              // labelDiv.style.marginTop = '-1em';
-              labelDiv.style.fontSize = "150%";
-              var labelObj = new THREE.CSS2DObject( labelDiv );
-              labelObj.position.set( 0, 0, dims[i][2]/2+locs[i][2] );
-              edges.add(labelObj);
-              boxes.push(edges);
-        }
-        else {
-          //console.log("else running");
-          let material = new THREE.LineBasicMaterial({
-              color: color,
-              linewidth: edgewidth
-          });
-          let edges = new THREE.LineSegments(edgeGeo, material);
-          edges.position.set(locs[i][0], locs[i][1], locs[i][2]);
-          edges.rotation.set(rots[i][0], rots[i][1], rots[i][2]);
-          var labelDiv = document.createElement( 'div' );
-          labelDiv.className = 'label';
-          labelDiv.textContent = labels[i];
-          labelDiv.style.color = lcolor;
-          // labelDiv.style.marginTop = '-1em';
-          labelDiv.style.fontSize = "150%";
-          var labelObj = new THREE.CSS2DObject( labelDiv );
-          labelObj.position.set( 0, 0, dims[i][2]/2+locs[i][2] );
-          edges.add(labelObj);
-          boxes.push(edges);
-        }
-        //let material = new THREE.LineBasicMaterial({
-            //color: "#ff0000",
-            //linewidth: edgewidth
-        //});
-        //let edges = new THREE.LineSegments(edgeGeo, material);
-        //edges.position.set(locs[i][0], locs[i][1], locs[i][2]);
-        //edges.rotation.set(rots[i][0], rots[i][1], rots[i][2]);
+//        //console.log(video[i],i)
+//        if (video[i] == "correct"){
+//          //console.log("correct");
+//          let material = new THREE.LineBasicMaterial({
+//              color: "#747a74",
+//              linewidth: edgewidth});
+//              let edges = new THREE.LineSegments(edgeGeo, material);
+//              edges.position.set(locs[i][0], locs[i][1], locs[i][2]);
+//              edges.rotation.set(rots[i][0], rots[i][1], rots[i][2]);
+//              var labelDiv = document.createElement( 'div' );
+//              labelDiv.className = 'label';
+//              labelDiv.textContent = labels[i];
+//              labelDiv.style.color = lcolor;
+//              // labelDiv.style.marginTop = '-1em';
+//              labelDiv.style.fontSize = "150%";
+//              var labelObj = new THREE.CSS2DObject( labelDiv );
+//              labelObj.position.set( 0, 0, dims[i][2]/2+locs[i][2] );
+//              edges.add(labelObj);
+//              boxes.push(edges);
+//        }
+//        else if (video[i] == "wrong"){
+//          let material = new THREE.LineBasicMaterial({
+//              color: "#ff0000",
+//              linewidth: edgewidth});
+//              let edges = new THREE.LineSegments(edgeGeo, material);
+//              edges.position.set(locs[i][0], locs[i][1], locs[i][2]);
+//              edges.rotation.set(rots[i][0], rots[i][1], rots[i][2]);
+//              var labelDiv = document.createElement( 'div' );
+//              labelDiv.className = 'label';
+//              labelDiv.textContent = labels[i];
+//              labelDiv.style.color = lcolor;
+//              // labelDiv.style.marginTop = '-1em';
+//              labelDiv.style.fontSize = "150%";
+//              var labelObj = new THREE.CSS2DObject( labelDiv );
+//              labelObj.position.set( 0, 0, dims[i][2]/2+locs[i][2] );
+//              edges.add(labelObj);
+//              boxes.push(edges);
+//        }
+//        else if (video[i] == "miss"){
+//          let material = new THREE.LineBasicMaterial({
+//              color: "#000aff",
+//              linewidth: edgewidth});
+//              let edges = new THREE.LineSegments(edgeGeo, material);
+//              edges.position.set(locs[i][0], locs[i][1], locs[i][2]);
+//              edges.rotation.set(rots[i][0], rots[i][1], rots[i][2]);
+//              var labelDiv = document.createElement( 'div' );
+//              labelDiv.className = 'label';
+//              labelDiv.textContent = labels[i];
+//              labelDiv.style.color = lcolor;
+//              // labelDiv.style.marginTop = '-1em';
+//              labelDiv.style.fontSize = "150%";
+//              var labelObj = new THREE.CSS2DObject( labelDiv );
+//              labelObj.position.set( 0, 0, dims[i][2]/2+locs[i][2] );
+//              edges.add(labelObj);
+//              boxes.push(edges);
+//        }
+//        else {
+//          //console.log("else running");
+//          let material = new THREE.LineBasicMaterial({
+//              color: color,
+//              linewidth: edgewidth
+//          });
+//          let edges = new THREE.LineSegments(edgeGeo, material);
+//          edges.position.set(locs[i][0], locs[i][1], locs[i][2]);
+//          edges.rotation.set(rots[i][0], rots[i][1], rots[i][2]);
+//          var labelDiv = document.createElement( 'div' );
+//          labelDiv.className = 'label';
+//          labelDiv.textContent = labels[i];
+//          labelDiv.style.color = lcolor;
+//          // labelDiv.style.marginTop = '-1em';
+//          labelDiv.style.fontSize = "150%";
+//          var labelObj = new THREE.CSS2DObject( labelDiv );
+//          labelObj.position.set( 0, 0, dims[i][2]/2+locs[i][2] );
+//          edges.add(labelObj);
+//          boxes.push(edges);
+//        }
+        let material = new THREE.LineBasicMaterial({
+            color: "#ff0000",
+            linewidth: edgewidth
+        });
+        let edges = new THREE.LineSegments(edgeGeo, material);
+        edges.position.set(locs[i][0], locs[i][1], locs[i][2]);
+        edges.rotation.set(rots[i][0], rots[i][1], rots[i][2]);
 
-        //var labelDiv = document.createElement( 'div' );
-        //labelDiv.className = 'label';
-        //labelDiv.textContent = labels[i];
-        //labelDiv.style.color = lcolor;
-        //// labelDiv.style.marginTop = '-1em';
-        //labelDiv.style.fontSize = "150%";
-        //var labelObj = new THREE.CSS2DObject( labelDiv );
-        //labelObj.position.set( 0, 0, dims[i][2]/2+locs[i][2] );
-        //edges.add(labelObj);
-        //boxes.push(edges);
+        var labelDiv = document.createElement( 'div' );
+        labelDiv.className = 'label';
+        labelDiv.textContent = labels[i];
+        labelDiv.style.color = lcolor;
+        // labelDiv.style.marginTop = '-1em';
+        labelDiv.style.fontSize = "150%";
+        var labelObj = new THREE.CSS2DObject( labelDiv );
+        labelObj.position.set( 0, 0, dims[i][2]/2+locs[i][2] );
+        edges.add(labelObj);
+        boxes.push(edges);
     }
     return boxes;
 }

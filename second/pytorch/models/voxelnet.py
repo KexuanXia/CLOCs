@@ -15,17 +15,19 @@ from torchplus.ops.array_ops import gather_nd, scatter_nd
 from torchplus.tools import change_default_args
 from second.pytorch.core import box_torch_ops
 from second.pytorch.core.losses import (WeightedSigmoidClassificationLoss,
-                                          WeightedSmoothL1LocalizationLoss,
-                                          WeightedSoftmaxClassificationLoss)
+                                        WeightedSmoothL1LocalizationLoss,
+                                        WeightedSoftmaxClassificationLoss)
 
 from second.pytorch.models import rpn, middle, voxel_encoder, fusion
 import pickle
 import sys
+
 if '/opt/ros/kinetic/lib/python2.7/dist-packages' in sys.path:
     sys.path.remove('/opt/ros/kinetic/lib/python2.7/dist-packages')
 import second.utils.eval as se
 import math
 import second.data.kitti_common as kitti
+
 
 def _get_pos_neg_loss(cls_loss, labels):
     # cls_loss: [N, num_anchors, num_class]
@@ -149,7 +151,7 @@ class VoxelNet(nn.Module):
         else:
             num_rpn_input_filters = middle_num_filters_d2[-1]
 
-        if use_sparse_rpn: # don't use this. just for fun.
+        if use_sparse_rpn:  # don't use this. just for fun.
             self.sparse_rpn = rpn.SparseRPN(
                 output_shape,
                 # num_input_features=vfe_num_filters[-1],
@@ -183,7 +185,7 @@ class VoxelNet(nn.Module):
                 "SpMiddleFHDLite": middle.SpMiddleFHDLite,
                 "SpMiddle2K": middle.SpMiddle2K,
                 "MiddleExtractor": middle.MiddleExtractor,
-                "SpMiddleVision":middle.SpMiddleVision
+                "SpMiddleVision": middle.SpMiddleVision
             }
             mid_class = mid_class_dict[middle_class_name]
             mid_class_vision = mid_class_dict['SpMiddleVision']
@@ -233,6 +235,7 @@ class VoxelNet(nn.Module):
         self._time_dict = {}
         self._time_total_dict = {}
         self._time_count_dict = {}
+
     def start_timer(self, *names):
         if not self.measure_time:
             return
@@ -265,7 +268,7 @@ class VoxelNet(nn.Module):
             ret[name] = val / max(1, count)
         return ret
 
-    def set_global_step(self,step_value):
+    def set_global_step(self, step_value):
         self.global_step = step_value
 
     def update_global_step(self):
@@ -274,7 +277,7 @@ class VoxelNet(nn.Module):
     def get_global_step(self):
         return int(self.global_step.cpu().numpy()[0])
 
-    def forward(self, example,detection_2d_path):
+    def forward(self, example, detection_2d_path):
         """module's forward should always accept dict and return loss.
         """
         voxels = example["voxels"]
@@ -309,6 +312,10 @@ class VoxelNet(nn.Module):
             else:
                 preds_dict = self.rpn(spatial_features)
             self.end_timer("rpn forward")
+        # print("shape of box_preds: ", preds_dict['box_preds'].shape)
+        # print("shape of cls_preds: ", preds_dict['cls_preds'].shape)
+        # print("shape of dir_cls_preds: ", preds_dict['dir_cls_preds'].shape)
+        # print("preds_dict in VoxelNet.forward(): ", preds_dict)
         box_preds = preds_dict["box_preds"]
         cls_preds = preds_dict["cls_preds"]
         # cls_preds shape [batch_size,200,176,2]
@@ -389,24 +396,23 @@ class VoxelNet(nn.Module):
             with open(detection_2d_file_name, 'r') as f:
                 lines = f.readlines()
             content = [line.strip().split(' ') for line in lines]
-            predicted_class = np.array([x[0] for x in content],dtype='object')
-            predicted_class_index = np.where(predicted_class=='Car')
+            predicted_class = np.array([x[0] for x in content], dtype='object')
+            predicted_class_index = np.where(predicted_class == 'Car')
             detection_result = np.array([[float(info) for info in x[4:8]] for x in content]).reshape(-1, 4)
             score = np.array([float(x[15]) for x in content])  # 1000 is the score scale!!!
-            f_detection_result=np.append(detection_result,score.reshape(-1,1),1)
-            middle_predictions=f_detection_result[predicted_class_index,:].reshape(-1,5)
-            top_predictions=middle_predictions[np.where(middle_predictions[:,4]>=-100)]
-            res, iou_test, tensor_index = self.train_stage_2(example, preds_dict,top_predictions)
+            f_detection_result = np.append(detection_result, score.reshape(-1, 1), 1)
+            middle_predictions = f_detection_result[predicted_class_index, :].reshape(-1, 5)
+            top_predictions = middle_predictions[np.where(middle_predictions[:, 4] >= -100)]
+            res, iou_test, tensor_index = self.train_stage_2(example, preds_dict, top_predictions)
             self.end_timer("predict")
 
             return res, preds_dict, top_predictions, iou_test, tensor_index
 
-
-    def train_stage_2(self, example, preds_dict,top_predictions):
+    def train_stage_2(self, example, preds_dict, top_predictions):
         t = time.time()
         batch_size = example['anchors'].shape[0]
         batch_anchors = example["anchors"].view(batch_size, -1, 7)
-        batch_anchors_reshape = batch_anchors.reshape(1,200,176,14)
+        # batch_anchors_reshape = batch_anchors.reshape(1, 200, 176, 14)
         batch_rect = example["rect"]
         batch_Trv2c = example["Trv2c"]
         batch_P2 = example["P2"]
@@ -477,12 +483,12 @@ class VoxelNet(nn.Module):
             # box_corners_in_image: [N, 8, 2]
             minxy = torch.min(box_corners_in_image, dim=1)[0]
             maxxy = torch.max(box_corners_in_image, dim=1)[0]
-            img_height = batch_image_shape[0,0]
-            img_width = batch_image_shape[0,1]
-            minxy[:,0] = torch.clamp(minxy[:,0],min = 0,max = img_width)
-            minxy[:,1] = torch.clamp(minxy[:,1],min = 0,max = img_height)
-            maxxy[:,0] = torch.clamp(maxxy[:,0],min = 0,max = img_width)
-            maxxy[:,1] = torch.clamp(maxxy[:,1],min = 0,max = img_height)
+            img_height = batch_image_shape[0, 0]
+            img_width = batch_image_shape[0, 1]
+            minxy[:, 0] = torch.clamp(minxy[:, 0], min=0, max=img_width)
+            minxy[:, 1] = torch.clamp(minxy[:, 1], min=0, max=img_height)
+            maxxy[:, 0] = torch.clamp(maxxy[:, 0], min=0, max=img_width)
+            maxxy[:, 1] = torch.clamp(maxxy[:, 1], min=0, max=img_height)
             box_2d_preds = torch.cat([minxy, maxxy], dim=1)
             # predictions
             predictions_dict = {
@@ -494,43 +500,42 @@ class VoxelNet(nn.Module):
                 "image_idx": img_idx,
             }
             predictions_dicts.append(predictions_dict)
-            dis_to_lidar = torch.norm(box_preds[:,:2],p=2,dim=1,keepdim=True)/82.0
+            dis_to_lidar = torch.norm(box_preds[:, :2], p=2, dim=1, keepdim=True) / 82.0
             box_2d_detector = np.zeros((200, 4))
-            box_2d_detector[0:top_predictions.shape[0],:]=top_predictions[:,:4]
-            box_2d_detector = top_predictions[:,:4]
-            box_2d_scores = top_predictions[:,4].reshape(-1,1)
-            time_iou_build_start=time.time()
-            overlaps1 = np.zeros((900000,4),dtype=box_2d_preds.detach().cpu().numpy().dtype)
-            tensor_index1 = np.zeros((900000,2),dtype=box_2d_preds.detach().cpu().numpy().dtype)
-            overlaps1[:,:] = -1
-            tensor_index1[:,:] = -1
+            box_2d_detector[0:top_predictions.shape[0], :] = top_predictions[:, :4]
+            box_2d_detector = top_predictions[:, :4]
+            box_2d_scores = top_predictions[:, 4].reshape(-1, 1)
+            time_iou_build_start = time.time()
+            overlaps1 = np.zeros((900000, 4), dtype=box_2d_preds.detach().cpu().numpy().dtype)
+            tensor_index1 = np.zeros((900000, 2), dtype=box_2d_preds.detach().cpu().numpy().dtype)
+            overlaps1[:, :] = -1
+            tensor_index1[:, :] = -1
             #final_scores[final_scores<0.1] = 0
             #box_2d_preds[(final_scores<0.1).reshape(-1),:] = 0 
-            iou_test,tensor_index, max_num = se.build_stage2_training(box_2d_preds.detach().cpu().numpy(),
-                                                box_2d_detector,
-                                                -1,
-                                                final_scores.detach().cpu().numpy(),
-                                                box_2d_scores,
-                                                dis_to_lidar.detach().cpu().numpy(),
-                                                overlaps1,
-                                                tensor_index1)
-            time_iou_build_end=time.time()
+            iou_test, tensor_index, max_num = se.build_stage2_training(box_2d_preds.detach().cpu().numpy(),
+                                                                       box_2d_detector,
+                                                                       -1,
+                                                                       final_scores.detach().cpu().numpy(),
+                                                                       box_2d_scores,
+                                                                       dis_to_lidar.detach().cpu().numpy(),
+                                                                       overlaps1,
+                                                                       tensor_index1)
+            time_iou_build_end = time.time()
             iou_test_tensor = torch.FloatTensor(iou_test)  #iou_test_tensor shape: [160000,4]
             tensor_index_tensor = torch.LongTensor(tensor_index)
-            iou_test_tensor = iou_test_tensor.permute(1,0)
-            iou_test_tensor = iou_test_tensor.reshape(1,4,1,900000)
-            tensor_index_tensor = tensor_index_tensor.reshape(-1,2)
+            iou_test_tensor = iou_test_tensor.permute(1, 0)
+            iou_test_tensor = iou_test_tensor.reshape(1, 4, 1, 900000)
+            tensor_index_tensor = tensor_index_tensor.reshape(-1, 2)
             if max_num == 0:
-                non_empty_iou_test_tensor = torch.zeros(1,4,1,2)
-                non_empty_iou_test_tensor[:,:,:,:] = -1
-                non_empty_tensor_index_tensor = torch.zeros(2,2)
-                non_empty_tensor_index_tensor[:,:] = -1
+                non_empty_iou_test_tensor = torch.zeros(1, 4, 1, 2)
+                non_empty_iou_test_tensor[:, :, :, :] = -1
+                non_empty_tensor_index_tensor = torch.zeros(2, 2)
+                non_empty_tensor_index_tensor[:, :] = -1
             else:
-                non_empty_iou_test_tensor = iou_test_tensor[:,:,:,:max_num]
-                non_empty_tensor_index_tensor = tensor_index_tensor[:max_num,:]
+                non_empty_iou_test_tensor = iou_test_tensor[:, :, :, :max_num]
+                non_empty_tensor_index_tensor = tensor_index_tensor[:max_num, :]
 
         return predictions_dicts, non_empty_iou_test_tensor, non_empty_tensor_index_tensor
-
 
     def metrics_to_float(self):
         self.rpn_acc.float()
@@ -567,8 +572,8 @@ class VoxelNet(nn.Module):
             "rpn_acc": float(rpn_acc),
         }
         for i, thresh in enumerate(self.rpn_metrics.thresholds):
-            ret[f"prec@{int(thresh*100)}"] = float(prec[i])
-            ret[f"rec@{int(thresh*100)}"] = float(recall[i])
+            ret[f"prec@{int(thresh * 100)}"] = float(prec[i])
+            ret[f"rec@{int(thresh * 100)}"] = float(recall[i])
         return ret
 
     def clear_metrics(self):
@@ -592,6 +597,7 @@ class VoxelNet(nn.Module):
         for child in net.children():
             VoxelNet.convert_norm_to_float(child)
         return net
+
 
 # attention! sin(a-b) = sin(a)cos(b) - cos(a)sin(b), this is the logic behind this
 def add_sin_difference(boxes1, boxes2):
@@ -649,10 +655,10 @@ def prepare_loss_weights(labels,
                          dtype=torch.float32):
     """get cls_weights and reg_weights from labels.
     """
-    cared = labels >= 0 #becaues labels=-1 means dont't care
+    cared = labels >= 0  #becaues labels=-1 means dont't care
     # cared: [batch,70400]
     # cared: [N, num_anchors]
-    positives = labels > 0 #because labels=1 means positive
+    positives = labels > 0  #because labels=1 means positive
     negatives = labels == 0  #because labels=0 means negative
     negative_cls_weights = negatives.type(dtype) * neg_cls_weight
     cls_weights = negative_cls_weights + pos_cls_weight * positives.type(dtype)

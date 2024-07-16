@@ -24,8 +24,27 @@ from second.utils.progress_bar import ProgressBar
 from second.pytorch.core import box_torch_ops
 from second.pytorch.core.losses import SigmoidFocalClassificationLoss
 from second.pytorch.models import fusion
+from second.data.preprocess import prep_pointcloud
+import torchvision.transforms as transforms
+from PIL import Image
+from second.core.box_np_ops import remove_outside_points
 
 
+from numba.core.errors import NumbaDeprecationWarning, NumbaPendingDeprecationWarning,NumbaPerformanceWarning,NumbaWarning
+import warnings
+warnings.simplefilter('ignore', category=NumbaDeprecationWarning)
+warnings.simplefilter('ignore', category=NumbaPendingDeprecationWarning)
+warnings.simplefilter('ignore', category=NumbaPerformanceWarning)
+warnings.simplefilter('ignore', category=NumbaWarning)
+warnings.simplefilter('ignore')
+warnings.filterwarnings('ignore')
+
+
+# predict_v2：主要集中在处理和生成预测结果，不涉及结果保存或评估。
+# predict_kitti_to_anno：在生成预测结果后，还会进行评估和注释数据生成。
+# _predict_kitti_to_file：在生成预测结果后，直接将结果保存为文件。
+
+# 将输入字典中的值转换为PyTorch的张量，并根据键名对数据类型进行处理。
 def example_convert_to_torch(example, dtype=torch.float32,
                              device=None) -> dict:
     device = device or torch.device("cuda:0")
@@ -48,6 +67,7 @@ def example_convert_to_torch(example, dtype=torch.float32,
             example_torch[k] = v
     return example_torch
 
+# 通过加载配置文件和预训练模型，初始化各个组件，最终构建并返回一个准备好的用于推理的三维目标检测模型。
 def build_inference_net(config_path,
              model_dir,
              result_path=None,
@@ -81,6 +101,7 @@ def build_inference_net(config_path,
     target_assigner = target_assigner_builder.build(target_assigner_cfg,
                                                     bv_range, box_coder)
     class_names = target_assigner.classes
+    # 调用build，build调用了Voxelnet对net进行实例化，Voxelnet中有forward函数进行前向传播
     net = second_builder.build(model_cfg, voxel_generator, target_assigner, measure_time=measure_time)
     net.cuda()
 
@@ -377,6 +398,7 @@ def train(config_path,
     logf.close()
 
 
+# 将输入数据经过神经网络模型和融合层处理，生成3D目标检测结果，并按照KITTI数据集的格式保存到文件中。
 def _predict_kitti_to_file(net,
                            detection_2d_path,
                            fusion_layer,
@@ -393,9 +415,9 @@ def _predict_kitti_to_file(net,
     t_end = time.time()
     t_fusion = t_end - t_start
     fusion_cls_preds_reshape = fusion_cls_preds.reshape(1,200,176,2)
+    # 可以注释掉下面这一行来运行纯SECOND
     all_3d_output.update({'cls_preds':fusion_cls_preds_reshape})
     predictions_dicts = predict_v2(net,example, all_3d_output)
-
 
     for i, preds_dict in enumerate(predictions_dicts):
         image_shape = batch_image_shape[i]
@@ -446,6 +468,7 @@ def _predict_kitti_to_file(net,
             f.write(result_str)
 
 
+# 从模型的预测结果生成KITTI格式的注释数据。该函数通过前向传播生成3D检测结果，计算分类损失，并将最终的检测结果转换为KITTI格式的注释。
 def predict_kitti_to_anno(net,
                           detection_2d_path,
                           fusion_layer,
@@ -457,16 +480,38 @@ def predict_kitti_to_anno(net,
     focal_loss_val = SigmoidFocalClassificationLoss()
     batch_image_shape = example['image_shape']
     batch_imgidx = example['image_idx']
-    all_3d_output_camera_dict, all_3d_output, top_predictions, fusion_input,torch_index = net(example,detection_2d_path)
+
+    # 模型推理，前向传播，返回5个结果 forward函数位于pytorch/models/voxelnet.py
+    # 相比于原本的second，多出了detection_2d_path
+    # all_3d_output_camera_dict: 包含3D检测结果的字典，可能是相机坐标系中的结果。
+    # all_3d_output: 包含3D检测结果的字典，可能是激光雷达坐标系中的结果。
+    # top_predictions: 顶部的预测结果，可能是2D或3D检测的预测框和类别。
+    # fusion_input: 用于多模态融合层的输入特征。
+    # torch_index: 用于索引的张量，可能是用于多模态融合的索引信息。
+    (all_3d_output_camera_dict,
+     all_3d_output,
+     top_predictions,
+     fusion_input,
+     torch_index) = net(example,detection_2d_path)
+    # print("all_3d_output_camera_dict: ", all_3d_output_camera_dict)
+    # print("all_3d_output: ", all_3d_output)
+    # print("top_predictions: ", top_predictions)
+    # print("fusion_input: ", fusion_input.shape)
+    # print("torch_index: ", torch_index.shape)
+
+
     t_start = time.time()
-    fusion_cls_preds,flag = fusion_layer(fusion_input.cuda(),torch_index.cuda())
+    # 模型推理，forward函数位于pytorch/models/fusion.py
+    # 将3D和2D检测结果融合，输出新的检测结果
+    fusion_cls_preds, flag = fusion_layer(fusion_input.cuda(),torch_index.cuda())
     t_end = time.time()
     t_fusion = t_end - t_start
     fusion_cls_preds_reshape = fusion_cls_preds.reshape(1,200,176,2)
-    all_3d_output.update({'cls_preds':fusion_cls_preds_reshape})   ###########################################!!!!!!!!!!!!!
+    all_3d_output.update({'cls_preds':fusion_cls_preds_reshape})
     predictions_dicts = predict_v2(net,example, all_3d_output)
+
     test_mode=False
-    if test_mode==False:
+    if test_mode==False and 'd3_gt_boxes' in example:
         d3_gt_boxes = example["d3_gt_boxes"][0,:,:]
         if d3_gt_boxes.shape[0] == 0:
             target_for_fusion = np.zeros((1,70400,1))
@@ -562,12 +607,12 @@ def predict_kitti_to_anno(net,
         annos[-1]["image_idx"] = np.array(
             [img_idx] * num_example, dtype=np.int64)
         #cls_losses_reduced=100
-    return annos, cls_losses_reduced
+    return annos, cls_losses_reduced, predictions_dicts
 
 
 def evaluate(config_path,
              model_dir,
-             result_path=None,
+             result_path='/home/xkx/CLOCs/eval_results',
              predict_test=False,
              ckpt_path=None,
              ref_detfile=None,
@@ -580,6 +625,7 @@ def evaluate(config_path,
         result_name = 'predict_test'
     else:
         result_name = 'eval_results'
+    # 如果没有提供存放结果的路径的话，将结果保存在model_dir下
     if result_path is None:
         result_path = model_dir / result_name
     else:
@@ -597,21 +643,26 @@ def evaluate(config_path,
     ######################
     # BUILD VOXEL GENERATOR
     ######################
+    # 输出sparse_shape: [  41 1600 1408]，表示体素的形状
     voxel_generator = voxel_builder.build(model_cfg.voxel_generator)
     bv_range = voxel_generator.point_cloud_range[[0, 1, 3, 4]]
     box_coder = box_coder_builder.build(model_cfg.box_coder)
     target_assigner_cfg = model_cfg.target_assigner
     target_assigner = target_assigner_builder.build(target_assigner_cfg,
                                                     bv_range, box_coder)
+    # 输出num_class is : 1，表示检测的目标类别
     class_names = target_assigner.classes
     # this one is used for training car detector
-    net = build_inference_net('./configs/car.fhd.config','../model_dir')
+    # 输出load existing model
+    net = build_inference_net('./configs/car.fhd.config','../model_dir/second_model')
     fusion_layer = fusion.fusion()
     fusion_layer.cuda()
     net.cuda()
+
     ############ restore parameters for fusion layer
     if ckpt_path is None:
         print("load existing model for fusion layer")
+        # 输出Restoring parameters from ../CLOCs_SecCas_pretrained/fusion_layer-11136.tckpt
         torchplus.train.try_restore_latest_checkpoints(model_dir, [fusion_layer])
     else:
         torchplus.train.restore(ckpt_path, fusion_layer)
@@ -664,7 +715,7 @@ def evaluate(config_path,
             prep_example_times.append(time.time() - t1)
 
         if pickle_result:
-            dt_annos_i, val_losses= predict_kitti_to_anno(
+            dt_annos_i, val_losses, _= predict_kitti_to_anno(
                 net, detection_2d_path, fusion_layer, example, class_names, center_limit_range,
                 model_cfg.lidar_input,global_set)
             dt_annos+= dt_annos_i
@@ -691,8 +742,9 @@ def evaluate(config_path,
         result = get_official_eval_result(gt_annos, dt_annos, class_names)
         # print(json.dumps(result, indent=2))
         print(result)
-        result = get_coco_eval_result(gt_annos, dt_annos, class_names)
-        print(result)
+        # get_coco这里还有一点bug但是应该影响不大
+        # result = get_coco_eval_result(gt_annos, dt_annos, class_names)
+        # print(result)
         if pickle_result:
             with open(result_path_step / "result.pkl", 'wb') as f:
                 pickle.dump(dt_annos, f)
@@ -700,6 +752,142 @@ def evaluate(config_path,
         if pickle_result:
             with open(result_path_step / "result.pkl", 'wb') as f:
                 pickle.dump(dt_annos, f)
+
+
+def inference_masked_input(idx, save_result=False, it_nr=3000):
+    idx_str = str(idx).zfill(6)
+    masked_input_root = '/home/xkx/kitti/training/velodyne_masked/' + idx_str
+    i_path = '/home/xkx/kitti/training/image_2/' + idx_str + '.png'
+    if save_result:
+        save_path = '/home/xkx/kitti/training/velodyne_masked_dt_results/' + idx_str
+        if not os.path.exists(save_path):
+            os.makedirs(save_path)
+
+    config_path = '/home/xkx/CLOCs/second/configs/car.fhd.config'
+    config = pipeline_pb2.TrainEvalPipelineConfig()
+    with open(config_path, "r") as f:
+        proto_str = f.read()
+        text_format.Merge(proto_str, config)
+
+    model_cfg = config.model.second
+    detection_2d_path = config.train_config.detection_2d_path
+    center_limit_range = model_cfg.post_center_limit_range
+    voxel_generator = voxel_builder.build(model_cfg.voxel_generator)
+    bv_range = voxel_generator.point_cloud_range[[0, 1, 3, 4]]
+    box_coder = box_coder_builder.build(model_cfg.box_coder)
+    target_assigner_cfg = model_cfg.target_assigner
+    target_assigner = target_assigner_builder.build(target_assigner_cfg,
+                                                    bv_range, box_coder)
+    class_names = target_assigner.classes
+    net = build_inference_net('./configs/car.fhd.config','../model_dir/second_model')
+    fusion_layer = fusion.fusion()
+    fusion_layer.cuda()
+    net.cuda()
+    torchplus.train.try_restore_latest_checkpoints('../CLOCs_SecCas_pretrained', [fusion_layer])
+    net.eval()
+    fusion_layer.eval()
+    info = read_kitti_info_val(idx=idx)
+
+    for i in range(it_nr):
+        masked_input_path = masked_input_root + '/' + idx_str + '_' + str(i) + '.bin'
+        if masked_input_path.split('.')[-1] == 'bin':
+            masked_input_pc = np.fromfile(masked_input_path, dtype=np.float32)
+            masked_input_pc = masked_input_pc.reshape(-1, 4)
+        elif masked_input_path.split('.')[-1] == 'npy':
+            masked_input_pc = np.load(masked_input_path)
+        else:
+            raise NotImplementedError
+
+        example = get_inference_input_dict(config=config,
+                                           voxel_generator=voxel_generator,
+                                           target_assigner=target_assigner,
+                                           info=info,
+                                           points=masked_input_pc,
+                                           i_path=i_path)
+
+        example = example_convert_to_torch(example, torch.float32)
+
+        dt_annos, val_losses, prediction_dicts = predict_kitti_to_anno(
+            net, detection_2d_path, fusion_layer, example, class_names, center_limit_range,
+            model_cfg.lidar_input)
+
+        print("bbox: ", prediction_dicts[0]['bbox'].cpu().detach().numpy())
+        print("box3d_lidar: ", prediction_dicts[0]['box3d_lidar'].cpu().detach().numpy())
+        print("scores: ", prediction_dicts[0]['scores'].cpu().detach().numpy())
+
+        # if save_result:
+
+        del example, dt_annos, val_losses, prediction_dicts
+
+
+
+
+def get_inference_input_dict(config, voxel_generator, target_assigner, info, points, i_path):
+    rect = info['calib/R0_rect']
+    P2 = info['calib/P2']
+    Trv2c = info['calib/Tr_velo_to_cam']
+    input_cfg = config.eval_input_reader
+    model_cfg = config.model.second
+
+    pil2tensor = transforms.ToTensor()
+    pil_image = Image.open(str(i_path)).convert("RGB")
+    image_pang_bgr = np.array(pil_image)[:, :, [2, 1, 0]]
+    image_pang = image_pang_bgr
+    '''
+    pil2tensor = transforms.ToTensor()
+    pil_image = Image.open(str(i_path))
+    image_pang = pil2tensor(pil_image)
+    '''
+    input_dict = {
+        'points': points,
+        'rect': rect,
+        'Trv2c': Trv2c,
+        'P2': P2,
+        'image_shape': np.array(info["img_shape"], dtype=np.int32),
+        'image_idx': info['image_idx'],
+        'image_path': info['img_path'],
+        'images': image_pang
+        # 'pointcloud_num_features': num_point_features,
+    }
+    # out_size_factor = model_cfg.rpn.layer_strides[0] // model_cfg.rpn.upsample_strides[0]
+
+    example = prep_pointcloud(
+        input_dict=input_dict,
+        root_path=None,
+        voxel_generator=voxel_generator,
+        target_assigner=target_assigner,
+        max_voxels=input_cfg.max_number_of_voxels,
+        class_names=target_assigner.classes,
+        training=False,
+        create_targets=False,
+        shuffle_points=input_cfg.shuffle_points,
+        generate_bev=False,
+        without_reflectivity=model_cfg.without_reflectivity,
+        num_point_features=model_cfg.num_point_features,
+        anchor_area_threshold=input_cfg.anchor_area_threshold,
+        anchor_cache=None,
+        out_size_factor=8,
+        out_dtype=np.float32)
+    example["image_idx"] = info['image_idx']
+    example["image_shape"] = input_dict["image_shape"]
+    example["points"] = points
+    if "anchors_mask" in example:
+        example["anchors_mask"] = example["anchors_mask"].astype(np.uint8)
+    #############
+    # convert example to batched example
+    #############
+    example = merge_second_batch([example])
+    return example
+
+def read_kitti_info_val(idx):
+    file_path = "/home/xkx/kitti/kitti_infos_val.pkl"
+    with open(file_path, 'rb') as file:
+        data = pickle.load(file)
+    for item in data:
+        if item.get('image_idx') == idx:
+            return item
+    return IndexError
+
 
 
 def save_config(config_path, save_path):
@@ -711,7 +899,9 @@ def save_config(config_path, save_path):
     with open(save_path, 'w') as f:
         f.write(ret)
 
+# 根据给定的输入示例和预测结果，生成最终的检测结果字典，不保存。这些检测结果包含2D和3D边界框、分类得分、标签以及图像索引。
 def predict_v2(net,example, preds_dict):
+    # keys in preds_dict:,  dict_keys(['box_preds', 'cls_preds', 'dir_cls_preds'])
     t = time.time()
     batch_size = example['anchors'].shape[0]
     batch_anchors = example["anchors"].view(batch_size, -1, 7)
@@ -912,7 +1102,67 @@ def predict_v2(net,example, preds_dict):
                 "image_idx": img_idx,
             }
         predictions_dicts.append(predictions_dict)
+    # keys in predictions_dict:, dict_keys(['bbox', 'box3d_camera', 'box3d_lidar', 'scores', 'label_preds',
+    # 'image_idx'])
     return predictions_dicts
+
+def save_example(config_path='../configs/car.fhd.config'):
+    config = pipeline_pb2.TrainEvalPipelineConfig()
+    with open(config_path, "r") as f:
+        proto_str = f.read()
+        text_format.Merge(proto_str, config)
+
+    input_cfg = config.eval_input_reader
+    model_cfg = config.model.second
+    train_cfg = config.train_config
+    detection_2d_path = config.train_config.detection_2d_path
+    center_limit_range = model_cfg.post_center_limit_range
+    ######################
+    # BUILD VOXEL GENERATOR
+    ######################
+    # 输出sparse_shape: [  41 1600 1408]，表示体素的形状
+    voxel_generator = voxel_builder.build(model_cfg.voxel_generator)
+    bv_range = voxel_generator.point_cloud_range[[0, 1, 3, 4]]
+    box_coder = box_coder_builder.build(model_cfg.box_coder)
+    target_assigner_cfg = model_cfg.target_assigner
+    target_assigner = target_assigner_builder.build(target_assigner_cfg,
+                                                    bv_range, box_coder)
+    # 输出num_class is : 1，表示检测的目标类别
+    class_names = target_assigner.classes
+
+    batch_size = input_cfg.batch_size
+    eval_dataset = input_reader_builder.build(
+        input_cfg,
+        model_cfg,
+        training=True,
+        voxel_generator=voxel_generator,
+        target_assigner=target_assigner)
+    eval_dataloader = torch.utils.data.DataLoader(
+        eval_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=0,# input_cfg.num_workers,
+        pin_memory=False,
+        collate_fn=merge_second_batch)
+
+    if train_cfg.enable_mixed_precision:
+        float_dtype = torch.float16
+    else:
+        float_dtype = torch.float32
+
+    save_path = '/home/xkx/kitti/example'
+    for example in iter(eval_dataloader):
+        example = example_convert_to_torch(example, float_dtype)
+        first_value = example['image_idx'][0]
+        file_name = f'{first_value:06}.pkl'
+        full_path = os.path.join(save_path, file_name)
+        print(full_path)
+        with open(full_path, 'wb') as f:
+            pickle.dump(example, f)
+        print(f'Dictionary saved as {full_path}')
+
 
 if __name__ == '__main__':
     fire.Fire()
+    # save_example()
+

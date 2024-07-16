@@ -10,6 +10,7 @@ from second.builder import target_assigner_builder, voxel_builder
 from second.pytorch.builder import box_coder_builder, second_builder
 from second.pytorch.models.voxelnet import VoxelNet
 from second.pytorch.train import predict_kitti_to_anno, example_convert_to_torch
+from second.pytorch.models import fusion
 
 
 class TorchInferenceContext(InferenceContext):
@@ -83,10 +84,21 @@ class TorchInferenceContext(InferenceContext):
         else:
             float_dtype = torch.float32
         example_torch = example_convert_to_torch(example, float_dtype)
+        # 这里原来是与second里面的代码一模一样的，但是cloc更改了predict_kitti_to_anno的入参，
+        # 因此这里尝试修改了result_annos
+        # 可视化效果很差的原因应该在这里，还未修改
+        # result_annos = predict_kitti_to_anno(
+        #     self.net, example_torch, list(
+        #         self.target_assigner.classes),
+        #     model_cfg.post_center_limit_range, model_cfg.lidar_input)
+        fusion_layer = fusion.fusion()
+        fusion_layer.cuda()
+        fusion_layer.eval()
         result_annos = predict_kitti_to_anno(
-            self.net, example_torch, list(
-                self.target_assigner.classes),
-            model_cfg.post_center_limit_range, model_cfg.lidar_input)
+            self.net, '/home/xkx/CLOCs/d2_detection_data', fusion_layer, example_torch,
+            list(self.target_assigner.classes),
+            model_cfg.post_center_limit_range,
+            model_cfg.lidar_input)
         return result_annos
 
     def _ctx(self):

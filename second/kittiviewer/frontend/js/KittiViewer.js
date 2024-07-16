@@ -1,10 +1,10 @@
 var KittiViewer = function (pointCloud, logger, imageCanvas) {
-    this.rootPath = "/home/xi/KITTI_DATASET_ROOT";
-    this.infoPath = "/home/xi/KITTI_DATASET_ROOT_noised/kitti_infos_val.pkl";
+    this.rootPath = "/home/xkx/kitti";
+    this.infoPath = "/home/xkx/kitti/kitti_infos_val.pkl";
     this.detPath = "/home/xi/model_dir_3/results/step_30950/result.pkl";
-    this.backend = "http://127.0.0.1:16666";
-    this.checkpointPath = "/home/xi/model_dir_3/voxelnet-30950.tckpt";
-    this.configPath = "/home/xi/second.pytorch/second/configs/car.fhd.config";
+    this.backend = "0.0.0.0:16666";
+    this.checkpointPath = "/home/xkx/CLOCs/model_dir/second_model/voxelnet-30950.tckpt";
+    this.configPath = "/home/xkx/CLOCs/second/configs/car.fhd.config";
     this.drawDet = false;
     this.imageIndexes = [];
     this.imageIndex = 1;
@@ -125,6 +125,11 @@ KittiViewer.prototype = {
                 console.log("inference fail!");
             },
             success: function (response) {
+                console.log("Inference response:", response);
+                if (!response || !response.results || !response.results[0]) {
+                    console.error("Unexpected response format:", response);
+                    return;
+                    }
                 response = response["results"][0];
                 var locs = response["dt_locs"];
                 var dims = response["dt_dims"];
@@ -338,7 +343,7 @@ KittiViewer.prototype = {
     },
     drawImage : function(){
         if (this.image === ''){
-            //console.log("??????");
+            console.log("Image is empty");
             return;
         }
         let self = this;

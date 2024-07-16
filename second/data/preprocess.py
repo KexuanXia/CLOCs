@@ -109,11 +109,11 @@ def prep_pointcloud(input_dict,
     P2 = input_dict["P2"]
     unlabeled_training = unlabeled_db_sampler is not None
     image_idx = input_dict["image_idx"]
-    '''
+
     image_shape = input_dict["image_shape"]    #pang added
     points = box_np_ops.remove_outside_points(points, rect, Trv2c, P2,
                                               image_shape) #pang added
-                                              '''
+
     if reference_detections is not None:
         C, R, T = box_np_ops.projection_matrix_to_CRT_kitti(P2)
         frustums = box_np_ops.get_frustum_v2(reference_detections, C)
