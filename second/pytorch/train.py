@@ -715,9 +715,10 @@ def evaluate(config_path,
             prep_example_times.append(time.time() - t1)
 
         if pickle_result:
-            dt_annos_i, val_losses, _= predict_kitti_to_anno(
-                net, detection_2d_path, fusion_layer, example, class_names, center_limit_range,
-                model_cfg.lidar_input,global_set)
+            with torch.no_grad():
+                dt_annos_i, val_losses, _= predict_kitti_to_anno(
+                    net, detection_2d_path, fusion_layer, example, class_names, center_limit_range,
+                    model_cfg.lidar_input,global_set)
             dt_annos+= dt_annos_i
             val_loss_final = val_loss_final + val_losses
         else:
@@ -754,15 +755,10 @@ def evaluate(config_path,
                 pickle.dump(dt_annos, f)
 
 
-def inference_masked_input(idx, save_result=False, it_nr=3000):
+def inference_masked_input(idx, save_result=False, it_nr=3000, batch_size=8):
     idx_str = str(idx).zfill(6)
-    masked_input_root = '/home/xkx/kitti/training/velodyne_masked/' + idx_str
+    masked_input_path = f'/home/xkx/kitti/training/velodyne_masked/{idx_str}_{it_nr}.pkl'
     i_path = '/home/xkx/kitti/training/image_2/' + idx_str + '.png'
-    if save_result:
-        save_path = '/home/xkx/kitti/training/velodyne_masked_dt_results/' + idx_str
-        if not os.path.exists(save_path):
-            os.makedirs(save_path)
-
     config_path = '/home/xkx/CLOCs/second/configs/car.fhd.config'
     config = pipeline_pb2.TrainEvalPipelineConfig()
     with open(config_path, "r") as f:
@@ -788,16 +784,16 @@ def inference_masked_input(idx, save_result=False, it_nr=3000):
     fusion_layer.eval()
     info = read_kitti_info_val(idx=idx)
 
-    for i in range(it_nr):
-        masked_input_path = masked_input_root + '/' + idx_str + '_' + str(i) + '.bin'
-        if masked_input_path.split('.')[-1] == 'bin':
-            masked_input_pc = np.fromfile(masked_input_path, dtype=np.float32)
-            masked_input_pc = masked_input_pc.reshape(-1, 4)
-        elif masked_input_path.split('.')[-1] == 'npy':
-            masked_input_pc = np.load(masked_input_path)
-        else:
-            raise NotImplementedError
+    results = []
 
+    with open(masked_input_path, 'rb') as file:
+        data = pickle.load(file)
+    for i in range(it_nr):
+        j, k = i // batch_size, i % batch_size
+        batch_masked_input_pc = data[j]['points']
+        masked_input_pc = batch_masked_input_pc[batch_masked_input_pc[:, 0] == k]
+        masked_input_pc = masked_input_pc[:, 1:]
+        # print(masked_input_pc.shape)
         example = get_inference_input_dict(config=config,
                                            voxel_generator=voxel_generator,
                                            target_assigner=target_assigner,
@@ -807,19 +803,20 @@ def inference_masked_input(idx, save_result=False, it_nr=3000):
 
         example = example_convert_to_torch(example, torch.float32)
 
-        dt_annos, val_losses, prediction_dicts = predict_kitti_to_anno(
-            net, detection_2d_path, fusion_layer, example, class_names, center_limit_range,
-            model_cfg.lidar_input)
+        with torch.no_grad():
+            dt_annos, val_losses, prediction_dicts = predict_kitti_to_anno(
+                net, detection_2d_path, fusion_layer, example, class_names, center_limit_range,
+                model_cfg.lidar_input)
+            prediction_dicts = prediction_dicts[0]
+            # print(prediction_dicts)
 
-        print("bbox: ", prediction_dicts[0]['bbox'].cpu().detach().numpy())
-        print("box3d_lidar: ", prediction_dicts[0]['box3d_lidar'].cpu().detach().numpy())
-        print("scores: ", prediction_dicts[0]['scores'].cpu().detach().numpy())
+        results.append(prediction_dicts)
 
-        # if save_result:
-
-        del example, dt_annos, val_losses, prediction_dicts
-
-
+    if save_result:
+        save_path = '/home/xkx/kitti/training/velodyne_masked_dt_results/' + idx_str + '_' + str(it_nr) + '.pkl'
+        with open(save_path, 'wb') as output_file:
+            pickle.dump(results, output_file)
+        print(f"detection results of masked {idx_str}.bin have been saved")
 
 
 def get_inference_input_dict(config, voxel_generator, target_assigner, info, points, i_path):
@@ -887,7 +884,6 @@ def read_kitti_info_val(idx):
         if item.get('image_idx') == idx:
             return item
     return IndexError
-
 
 
 def save_config(config_path, save_path):
