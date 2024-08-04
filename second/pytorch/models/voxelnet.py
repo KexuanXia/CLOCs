@@ -398,6 +398,7 @@ class VoxelNet(nn.Module):
             content = [line.strip().split(' ') for line in lines]
             predicted_class = np.array([x[0] for x in content], dtype='object')
             predicted_class_index = np.where(predicted_class == 'Car')
+            # predicted_class_index = np.where(predicted_class == 'Pedestrian')
             detection_result = np.array([[float(info) for info in x[4:8]] for x in content]).reshape(-1, 4)
             score = np.array([float(x[15]) for x in content])  # 1000 is the score scale!!!
             f_detection_result = np.append(detection_result, score.reshape(-1, 1), 1)

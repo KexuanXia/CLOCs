@@ -610,16 +610,17 @@ def predict_kitti_to_anno(net,
     return annos, cls_losses_reduced, predictions_dicts
 
 
-def evaluate(config_path,
-             model_dir,
+def evaluate(config_path='./configs/car.fhd.config',
+             second_model_dir='/home/xkx/CLOCs/model_dir/second_model',
+             fusion_model_dir='../CLOCs_SecCas_pretrained',
              result_path='/home/xkx/CLOCs/eval_results',
              predict_test=False,
              ckpt_path=None,
              ref_detfile=None,
              pickle_result=True,
              measure_time=False,
-             batch_size=None):
-    model_dir = pathlib.Path(model_dir)
+             batch_size=1):
+    second_model_dir = pathlib.Path(second_model_dir)
     print("Predict_test: ",predict_test)
     if predict_test:
         result_name = 'predict_test'
@@ -627,7 +628,7 @@ def evaluate(config_path,
         result_name = 'eval_results'
     # 如果没有提供存放结果的路径的话，将结果保存在model_dir下
     if result_path is None:
-        result_path = model_dir / result_name
+        result_path = second_model_dir / result_name
     else:
         result_path = pathlib.Path(result_path)
     config = pipeline_pb2.TrainEvalPipelineConfig()
@@ -654,7 +655,7 @@ def evaluate(config_path,
     class_names = target_assigner.classes
     # this one is used for training car detector
     # 输出load existing model
-    net = build_inference_net('./configs/car.fhd.config','../model_dir/second_model')
+    net = build_inference_net(config_path, second_model_dir)
     fusion_layer = fusion.fusion()
     fusion_layer.cuda()
     net.cuda()
@@ -663,7 +664,7 @@ def evaluate(config_path,
     if ckpt_path is None:
         print("load existing model for fusion layer")
         # 输出Restoring parameters from ../CLOCs_SecCas_pretrained/fusion_layer-11136.tckpt
-        torchplus.train.try_restore_latest_checkpoints(model_dir, [fusion_layer])
+        torchplus.train.try_restore_latest_checkpoints(fusion_model_dir, [fusion_layer])
     else:
         torchplus.train.restore(ckpt_path, fusion_layer)
     if train_cfg.enable_mixed_precision:
@@ -755,11 +756,13 @@ def evaluate(config_path,
                 pickle.dump(dt_annos, f)
 
 
-def inference_masked_input(idx, save_result=False, it_nr=3000, batch_size=8):
+def inference_original_input(idx, save_result=False,
+                             config_path='/home/xkx/CLOCs/second/configs/car.fhd.config',
+                             second_model_dir='../model_dir/second_model',
+                             fusion_model_dir='../CLOCs_SecCas_pretrained'):
     idx_str = str(idx).zfill(6)
-    masked_input_path = f'/home/xkx/kitti/training/velodyne_masked/{idx_str}_{it_nr}.pkl'
+    input_path = f'/home/xkx/kitti/training/velodyne/{idx_str}.bin'
     i_path = '/home/xkx/kitti/training/image_2/' + idx_str + '.png'
-    config_path = '/home/xkx/CLOCs/second/configs/car.fhd.config'
     config = pipeline_pb2.TrainEvalPipelineConfig()
     with open(config_path, "r") as f:
         proto_str = f.read()
@@ -775,17 +778,76 @@ def inference_masked_input(idx, save_result=False, it_nr=3000, batch_size=8):
     target_assigner = target_assigner_builder.build(target_assigner_cfg,
                                                     bv_range, box_coder)
     class_names = target_assigner.classes
-    net = build_inference_net('./configs/car.fhd.config','../model_dir/second_model')
+    net = build_inference_net(config_path,second_model_dir)
     fusion_layer = fusion.fusion()
     fusion_layer.cuda()
     net.cuda()
-    torchplus.train.try_restore_latest_checkpoints('../CLOCs_SecCas_pretrained', [fusion_layer])
+    torchplus.train.try_restore_latest_checkpoints(fusion_model_dir, [fusion_layer])
+    net.eval()
+    fusion_layer.eval()
+    info = read_kitti_info_val(idx=idx)
+
+    input_pc = np.fromfile(input_path, dtype=np.float32)
+    input_pc = input_pc.reshape(-1, 4)
+
+    example = get_inference_input_dict(config=config,
+                                       voxel_generator=voxel_generator,
+                                       target_assigner=target_assigner,
+                                       info=info,
+                                       points=input_pc,
+                                       i_path=i_path)
+
+    example = example_convert_to_torch(example, torch.float32)
+
+    with torch.no_grad():
+        dt_annos, val_losses, prediction_dicts = predict_kitti_to_anno(
+            net, detection_2d_path, fusion_layer, example, class_names, center_limit_range,
+            model_cfg.lidar_input)
+        prediction_dicts = prediction_dicts[0]
+        print("prediction result: ", prediction_dicts)
+
+    if save_result:
+        save_path = f'/home/xkx/kitti/training/velodyne_masked_dt_results/{idx_str}_original.pkl'
+        with open(save_path, 'wb') as output_file:
+            pickle.dump(prediction_dicts, output_file)
+        print(f"detection results of original {idx_str}.bin have been saved")
+
+
+def inference_masked_input(idx, save_result=False, it_nr=3000, batch_size=8,
+                           config_path='/home/xkx/CLOCs/second/configs/car.fhd.config',
+                           second_model_dir='../model_dir/second_model',
+                           fusion_model_dir='../CLOCs_SecCas_pretrained'
+                           ):
+    idx_str = str(idx).zfill(6)
+    masked_input_path = f'/home/xkx/kitti/training/velodyne_masked/{idx_str}_{it_nr}.pkl'
+    i_path = '/home/xkx/kitti/training/image_2/' + idx_str + '.png'
+    config = pipeline_pb2.TrainEvalPipelineConfig()
+    with open(config_path, "r") as f:
+        proto_str = f.read()
+        text_format.Merge(proto_str, config)
+
+    model_cfg = config.model.second
+    detection_2d_path = config.train_config.detection_2d_path
+    center_limit_range = model_cfg.post_center_limit_range
+    voxel_generator = voxel_builder.build(model_cfg.voxel_generator)
+    bv_range = voxel_generator.point_cloud_range[[0, 1, 3, 4]]
+    box_coder = box_coder_builder.build(model_cfg.box_coder)
+    target_assigner_cfg = model_cfg.target_assigner
+    target_assigner = target_assigner_builder.build(target_assigner_cfg,
+                                                    bv_range, box_coder)
+    class_names = target_assigner.classes
+    net = build_inference_net(config_path,second_model_dir)
+    fusion_layer = fusion.fusion()
+    fusion_layer.cuda()
+    net.cuda()
+    torchplus.train.try_restore_latest_checkpoints(fusion_model_dir, [fusion_layer])
     net.eval()
     fusion_layer.eval()
     info = read_kitti_info_val(idx=idx)
 
     results = []
 
+    # read masked input from occam
     with open(masked_input_path, 'rb') as file:
         data = pickle.load(file)
     for i in range(it_nr):
@@ -808,7 +870,7 @@ def inference_masked_input(idx, save_result=False, it_nr=3000, batch_size=8):
                 net, detection_2d_path, fusion_layer, example, class_names, center_limit_range,
                 model_cfg.lidar_input)
             prediction_dicts = prediction_dicts[0]
-            # print(prediction_dicts)
+            # print("prediction_dicts: ", prediction_dicts)
 
         results.append(prediction_dicts)
 
@@ -877,7 +939,7 @@ def get_inference_input_dict(config, voxel_generator, target_assigner, info, poi
     return example
 
 def read_kitti_info_val(idx):
-    file_path = "/home/xkx/kitti/kitti_infos_val.pkl"
+    file_path = "/home/xkx/kitti/kitti_infos_trainval.pkl"
     with open(file_path, 'rb') as file:
         data = pickle.load(file)
     for item in data:
@@ -895,7 +957,7 @@ def save_config(config_path, save_path):
     with open(save_path, 'w') as f:
         f.write(ret)
 
-# 根据给定的输入示例和预测结果，生成最终的检测结果字典，不保存。这些检测结果包含2D和3D边界框、分类得分、标签以及图像索引。
+# 后处理，接收preds_dict里的大量proposal，返回最终的检测结果
 def predict_v2(net,example, preds_dict):
     # keys in preds_dict:,  dict_keys(['box_preds', 'cls_preds', 'dir_cls_preds'])
     t = time.time()
