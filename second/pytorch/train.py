@@ -17,9 +17,9 @@ from second.builder import target_assigner_builder, voxel_builder
 from second.data.preprocess import merge_second_batch
 from second.protos import pipeline_pb2
 from second.pytorch.builder import (box_coder_builder, input_reader_builder,
-                                      lr_scheduler_builder, optimizer_builder,
-                                      second_builder)
-from second.utils.eval import get_coco_eval_result, get_official_eval_result,bev_box_overlap,d3_box_overlap
+                                    lr_scheduler_builder, optimizer_builder,
+                                    second_builder)
+from second.utils.eval import get_coco_eval_result, get_official_eval_result, bev_box_overlap, d3_box_overlap
 from second.utils.progress_bar import ProgressBar
 from second.pytorch.core import box_torch_ops
 from second.pytorch.core.losses import SigmoidFocalClassificationLoss
@@ -28,10 +28,16 @@ from second.data.preprocess import prep_pointcloud
 import torchvision.transforms as transforms
 from PIL import Image
 from second.core.box_np_ops import remove_outside_points
+# from second.kittiviewer.viewer import _riou3d_shapely
+import matplotlib.pyplot as plt
+from scipy.interpolate import make_interp_spline
+import open3d as o3d
+from scipy.spatial.transform import Rotation
 
-
-from numba.core.errors import NumbaDeprecationWarning, NumbaPendingDeprecationWarning,NumbaPerformanceWarning,NumbaWarning
+from numba.core.errors import NumbaDeprecationWarning, NumbaPendingDeprecationWarning, NumbaPerformanceWarning, \
+    NumbaWarning
 import warnings
+
 warnings.simplefilter('ignore', category=NumbaDeprecationWarning)
 warnings.simplefilter('ignore', category=NumbaPendingDeprecationWarning)
 warnings.simplefilter('ignore', category=NumbaPerformanceWarning)
@@ -51,7 +57,7 @@ def example_convert_to_torch(example, dtype=torch.float32,
     example_torch = {}
     float_names = [
         "voxels", "anchors", "reg_targets", "reg_weights", "bev_map", "rect",
-        "Trv2c", "P2", "d3_gt_boxes","gt_2d_boxes"
+        "Trv2c", "P2", "d3_gt_boxes", "gt_2d_boxes"
     ]
 
     for k, v in example.items():
@@ -67,16 +73,17 @@ def example_convert_to_torch(example, dtype=torch.float32,
             example_torch[k] = v
     return example_torch
 
+
 # 通过加载配置文件和预训练模型，初始化各个组件，最终构建并返回一个准备好的用于推理的三维目标检测模型。
 def build_inference_net(config_path,
-             model_dir,
-             result_path=None,
-             predict_test=False,
-             ckpt_path=None,
-             ref_detfile=None,
-             pickle_result=True,
-             measure_time=False,
-             batch_size=1):
+                        model_dir,
+                        result_path=None,
+                        predict_test=False,
+                        ckpt_path=None,
+                        ref_detfile=None,
+                        pickle_result=True,
+                        measure_time=False,
+                        batch_size=1):
     model_dir = pathlib.Path(model_dir)
     if predict_test:
         result_name = 'predict_test'
@@ -115,6 +122,7 @@ def build_inference_net(config_path,
     net.eval()
     return net
 
+
 def train(config_path,
           model_dir,
           result_path=None,
@@ -142,7 +150,7 @@ def train(config_path,
     model_cfg = config.model.second
     train_cfg = config.train_config
     detection_2d_path = config.train_config.detection_2d_path
-    print("2d detection path:",detection_2d_path)
+    print("2d detection path:", detection_2d_path)
     center_limit_range = model_cfg.post_center_limit_range
     voxel_generator = voxel_builder.build(model_cfg.voxel_generator)
     bv_range = voxel_generator.point_cloud_range[[0, 1, 3, 4]]
@@ -151,7 +159,7 @@ def train(config_path,
     target_assigner = target_assigner_builder.build(target_assigner_cfg,
                                                     bv_range, box_coder)
     class_names = target_assigner.classes
-    net = build_inference_net('./configs/car.fhd.config','../model_dir')
+    net = build_inference_net('./configs/car.fhd.config', '../model_dir')
     fusion_layer = fusion.fusion()
     fusion_layer.cuda()
     optimizer_cfg = train_cfg.optimizer
@@ -160,7 +168,8 @@ def train(config_path,
         net.metrics_to_float()
         net.convert_norm_to_float(net)
     loss_scale = train_cfg.loss_scale_factor
-    mixed_optimizer = optimizer_builder.build(optimizer_cfg, fusion_layer, mixed=train_cfg.enable_mixed_precision, loss_scale=loss_scale)
+    mixed_optimizer = optimizer_builder.build(optimizer_cfg, fusion_layer, mixed=train_cfg.enable_mixed_precision,
+                                              loss_scale=loss_scale)
     optimizer = mixed_optimizer
     # must restore optimizer AFTER using MixedPrecisionWrapper
     torchplus.train.try_restore_latest_checkpoints(model_dir,
@@ -183,9 +192,10 @@ def train(config_path,
     eval_dataset = input_reader_builder.build(
         eval_input_cfg,
         model_cfg,
-        training=True,   #if rhnning for test, here it needs to be False
+        training=True,  #if rhnning for test, here it needs to be False
         voxel_generator=voxel_generator,
         target_assigner=target_assigner)
+
     def _worker_init_fn(worker_id):
         time_seed = np.array(time.time(), dtype=np.int32)
         np.random.seed(time_seed + worker_id)
@@ -207,7 +217,6 @@ def train(config_path,
         num_workers=eval_input_cfg.num_workers,
         pin_memory=False,
         collate_fn=merge_second_batch)
-
 
     data_iter = iter(dataloader)
 
@@ -258,41 +267,43 @@ def train(config_path,
                     example = next(data_iter)
                 example_torch = example_convert_to_torch(example, float_dtype)
                 batch_size = example["anchors"].shape[0]
-                all_3d_output_camera_dict, all_3d_output, top_predictions, fusion_input,tensor_index = net(example_torch,detection_2d_path)
-                d3_gt_boxes = example_torch["d3_gt_boxes"][0,:,:]
+                all_3d_output_camera_dict, all_3d_output, top_predictions, fusion_input, tensor_index = net(
+                    example_torch, detection_2d_path)
+                d3_gt_boxes = example_torch["d3_gt_boxes"][0, :, :]
                 if d3_gt_boxes.shape[0] == 0:
-                    target_for_fusion = np.zeros((1,70400,1))
-                    positives = torch.zeros(1,70400).type(torch.float32).cuda()
-                    negatives = torch.zeros(1,70400).type(torch.float32).cuda()
-                    negatives[:,:] = 1
+                    target_for_fusion = np.zeros((1, 70400, 1))
+                    positives = torch.zeros(1, 70400).type(torch.float32).cuda()
+                    negatives = torch.zeros(1, 70400).type(torch.float32).cuda()
+                    negatives[:, :] = 1
                 else:
                     d3_gt_boxes_camera = box_torch_ops.box_lidar_to_camera(
-                        d3_gt_boxes, example_torch['rect'][0,:], example_torch['Trv2c'][0,:])
-                    d3_gt_boxes_camera_bev = d3_gt_boxes_camera[:,[0,2,3,5,6]]
+                        d3_gt_boxes, example_torch['rect'][0, :], example_torch['Trv2c'][0, :])
+                    d3_gt_boxes_camera_bev = d3_gt_boxes_camera[:, [0, 2, 3, 5, 6]]
                     ###### predicted bev boxes
                     pred_3d_box = all_3d_output_camera_dict[0]["box3d_camera"]
-                    pred_bev_box = pred_3d_box[:,[0,2,3,5,6]]
+                    pred_bev_box = pred_3d_box[:, [0, 2, 3, 5, 6]]
                     #iou_bev = bev_box_overlap(d3_gt_boxes_camera_bev.detach().cpu().numpy(), pred_bev_box.detach().cpu().numpy(), criterion=-1)
-                    iou_bev = d3_box_overlap(d3_gt_boxes_camera.detach().cpu().numpy(), pred_3d_box.squeeze().detach().cpu().numpy(), criterion=-1)
-                    iou_bev_max = np.amax(iou_bev,axis=0)
+                    iou_bev = d3_box_overlap(d3_gt_boxes_camera.detach().cpu().numpy(),
+                                             pred_3d_box.squeeze().detach().cpu().numpy(), criterion=-1)
+                    iou_bev_max = np.amax(iou_bev, axis=0)
                     #print(np.max(iou_bev_max))
-                    target_for_fusion = ((iou_bev_max >= 0.7)*1).reshape(1,-1,1)
+                    target_for_fusion = ((iou_bev_max >= 0.7) * 1).reshape(1, -1, 1)
 
-                    positive_index = ((iou_bev_max >= 0.7)*1).reshape(1,-1)
+                    positive_index = ((iou_bev_max >= 0.7) * 1).reshape(1, -1)
                     positives = torch.from_numpy(positive_index).type(torch.float32).cuda()
-                    negative_index = ((iou_bev_max <= 0.5)*1).reshape(1,-1)
+                    negative_index = ((iou_bev_max <= 0.5) * 1).reshape(1, -1)
                     negatives = torch.from_numpy(negative_index).type(torch.float32).cuda()
 
-                cls_preds,flag = fusion_layer(fusion_input.cuda(),tensor_index.cuda())
+                cls_preds, flag = fusion_layer(fusion_input.cuda(), tensor_index.cuda())
                 one_hot_targets = torch.from_numpy(target_for_fusion).type(torch.float32).cuda()
 
                 negative_cls_weights = negatives.type(torch.float32) * 1.0
                 cls_weights = negative_cls_weights + 1.0 * positives.type(torch.float32)
                 pos_normalizer = positives.sum(1, keepdim=True).type(torch.float32)
                 cls_weights /= torch.clamp(pos_normalizer, min=1.0)
-                if flag==1:
+                if flag == 1:
                     cls_losses = focal_loss._compute_loss(cls_preds, one_hot_targets, cls_weights.cuda())  # [N, M]
-                    cls_losses_reduced = cls_losses.sum()/example_torch['labels'].shape[0]
+                    cls_losses_reduced = cls_losses.sum() / example_torch['labels'].shape[0]
                     cls_loss_sum = cls_loss_sum + cls_losses_reduced
                     if train_cfg.enable_mixed_precision:
                         loss *= loss_scale
@@ -305,10 +316,10 @@ def train(config_path,
                 metrics = {}
                 global_step = net.get_global_step()
                 if global_step % display_step == 0:
-                    print("now it is",global_step,"steps", " and the cls_loss is :",cls_loss_sum/display_step,
-                    "learning_rate: ",float(optimizer.lr),file=logf)
-                    print("now it is",global_step,"steps", " and the cls_loss is :",cls_loss_sum/display_step,
-                    "learning_rate: ",float(optimizer.lr))
+                    print("now it is", global_step, "steps", " and the cls_loss is :", cls_loss_sum / display_step,
+                          "learning_rate: ", float(optimizer.lr), file=logf)
+                    print("now it is", global_step, "steps", " and the cls_loss is :", cls_loss_sum / display_step,
+                          "learning_rate: ", float(optimizer.lr))
                     cls_loss_sum = 0
 
                 ckpt_elasped_time = time.time() - ckpt_start_time
@@ -348,18 +359,18 @@ def train(config_path,
                     dt_annos_i, val_losses = predict_kitti_to_anno(
                         net, detection_2d_path, fusion_layer, example, class_names, center_limit_range,
                         model_cfg.lidar_input)
-                    dt_annos+= dt_annos_i
+                    dt_annos += dt_annos_i
                     val_loss_final = val_loss_final + val_losses
                 else:
-                    _predict_kitti_to_file(net, detection_2d_path,example, result_path_step,
+                    _predict_kitti_to_file(net, detection_2d_path, example, result_path_step,
                                            class_names, center_limit_range,
                                            model_cfg.lidar_input)
 
                 prog_bar.print_bar()
 
             sec_per_ex = len(eval_dataset) / (time.time() - t)
-            print("validation_loss:", val_loss_final/len(eval_dataloader))
-            print("validation_loss:", val_loss_final/len(eval_dataloader),file=logf)
+            print("validation_loss:", val_loss_final / len(eval_dataloader))
+            print("validation_loss:", val_loss_final / len(eval_dataloader), file=logf)
             print(f'generate label finished({sec_per_ex:.2f}/s). start eval:')
             print(
                 f'generate label finished({sec_per_ex:.2f}/s). start eval:',
@@ -409,15 +420,16 @@ def _predict_kitti_to_file(net,
                            lidar_input=False):
     batch_image_shape = example['image_shape']
     batch_imgidx = example['image_idx']
-    all_3d_output_camera_dict, all_3d_output, top_predictions, fusion_input,torch_index = net(example,detection_2d_path)
+    all_3d_output_camera_dict, all_3d_output, top_predictions, fusion_input, torch_index = net(example,
+                                                                                               detection_2d_path)
     t_start = time.time()
-    fusion_cls_preds,flag = fusion_layer(fusion_input.cuda(),torch_index.cuda())
+    fusion_cls_preds, flag = fusion_layer(fusion_input.cuda(), torch_index.cuda())
     t_end = time.time()
     t_fusion = t_end - t_start
-    fusion_cls_preds_reshape = fusion_cls_preds.reshape(1,200,176,2)
+    fusion_cls_preds_reshape = fusion_cls_preds.reshape(1, 200, 176, 2)
     # 可以注释掉下面这一行来运行纯SECOND
-    all_3d_output.update({'cls_preds':fusion_cls_preds_reshape})
-    predictions_dicts = predict_v2(net,example, all_3d_output)
+    all_3d_output.update({'cls_preds': fusion_cls_preds_reshape})
+    predictions_dicts = predict_v2(net, example, all_3d_output)
 
     for i, preds_dict in enumerate(predictions_dicts):
         image_shape = batch_image_shape[i]
@@ -492,46 +504,46 @@ def predict_kitti_to_anno(net,
      all_3d_output,
      top_predictions,
      fusion_input,
-     torch_index) = net(example,detection_2d_path)
+     torch_index) = net(example, detection_2d_path)
     # print("all_3d_output_camera_dict: ", all_3d_output_camera_dict)
     # print("all_3d_output: ", all_3d_output)
     # print("top_predictions: ", top_predictions)
     # print("fusion_input: ", fusion_input.shape)
     # print("torch_index: ", torch_index.shape)
 
-
     t_start = time.time()
     # 模型推理，forward函数位于pytorch/models/fusion.py
     # 将3D和2D检测结果融合，输出新的检测结果
-    fusion_cls_preds, flag = fusion_layer(fusion_input.cuda(),torch_index.cuda())
+    fusion_cls_preds, flag = fusion_layer(fusion_input.cuda(), torch_index.cuda())
     t_end = time.time()
     t_fusion = t_end - t_start
-    fusion_cls_preds_reshape = fusion_cls_preds.reshape(1,200,176,2)
-    all_3d_output.update({'cls_preds':fusion_cls_preds_reshape})
-    predictions_dicts = predict_v2(net,example, all_3d_output)
+    fusion_cls_preds_reshape = fusion_cls_preds.reshape(1, 200, 176, 2)
+    all_3d_output.update({'cls_preds': fusion_cls_preds_reshape})
+    predictions_dicts = predict_v2(net, example, all_3d_output)
 
-    test_mode=False
-    if test_mode==False and 'd3_gt_boxes' in example:
-        d3_gt_boxes = example["d3_gt_boxes"][0,:,:]
+    test_mode = False
+    if test_mode == False and 'd3_gt_boxes' in example:
+        d3_gt_boxes = example["d3_gt_boxes"][0, :, :]
         if d3_gt_boxes.shape[0] == 0:
-            target_for_fusion = np.zeros((1,70400,1))
-            positives = torch.zeros(1,70400).type(torch.float32).cuda()
-            negatives = torch.zeros(1,70400).type(torch.float32).cuda()
-            negatives[:,:] = 1
+            target_for_fusion = np.zeros((1, 70400, 1))
+            positives = torch.zeros(1, 70400).type(torch.float32).cuda()
+            negatives = torch.zeros(1, 70400).type(torch.float32).cuda()
+            negatives[:, :] = 1
         else:
             d3_gt_boxes_camera = box_torch_ops.box_lidar_to_camera(
-                d3_gt_boxes, example['rect'][0,:], example['Trv2c'][0,:])
-            d3_gt_boxes_camera_bev = d3_gt_boxes_camera[:,[0,2,3,5,6]]
+                d3_gt_boxes, example['rect'][0, :], example['Trv2c'][0, :])
+            d3_gt_boxes_camera_bev = d3_gt_boxes_camera[:, [0, 2, 3, 5, 6]]
             ###### predicted bev boxes
             pred_3d_box = all_3d_output_camera_dict[0]["box3d_camera"]
-            pred_bev_box = pred_3d_box[:,[0,2,3,5,6]]
+            pred_bev_box = pred_3d_box[:, [0, 2, 3, 5, 6]]
             #iou_bev = bev_box_overlap(d3_gt_boxes_camera_bev.detach().cpu().numpy(), pred_bev_box.detach().cpu().numpy(), criterion=-1)
-            iou_bev = d3_box_overlap(d3_gt_boxes_camera.detach().cpu().numpy(), pred_3d_box.squeeze().detach().cpu().numpy(), criterion=-1)
-            iou_bev_max = np.amax(iou_bev,axis=0)
-            target_for_fusion = ((iou_bev_max >= 0.7)*1).reshape(1,-1,1)
-            positive_index = ((iou_bev_max >= 0.7)*1).reshape(1,-1)
+            iou_bev = d3_box_overlap(d3_gt_boxes_camera.detach().cpu().numpy(),
+                                     pred_3d_box.squeeze().detach().cpu().numpy(), criterion=-1)
+            iou_bev_max = np.amax(iou_bev, axis=0)
+            target_for_fusion = ((iou_bev_max >= 0.7) * 1).reshape(1, -1, 1)
+            positive_index = ((iou_bev_max >= 0.7) * 1).reshape(1, -1)
             positives = torch.from_numpy(positive_index).type(torch.float32).cuda()
-            negative_index = ((iou_bev_max <= 0.5)*1).reshape(1,-1)
+            negative_index = ((iou_bev_max <= 0.5) * 1).reshape(1, -1)
             negatives = torch.from_numpy(negative_index).type(torch.float32).cuda()
 
         cls_preds = fusion_cls_preds
@@ -543,7 +555,7 @@ def predict_kitti_to_anno(net,
         cls_weights /= torch.clamp(pos_normalizer, min=1.0)
         cls_losses = focal_loss_val._compute_loss(cls_preds, one_hot_targets, cls_weights.cuda())  # [N, M]
 
-        cls_losses_reduced = cls_losses.sum()/example['labels'].shape[0]
+        cls_losses_reduced = cls_losses.sum() / example['labels'].shape[0]
         cls_losses_reduced = cls_losses_reduced.detach().cpu().numpy()
     else:
         cls_losses_reduced = 1000
@@ -621,7 +633,7 @@ def evaluate(config_path='./configs/car.fhd.config',
              measure_time=False,
              batch_size=1):
     second_model_dir = pathlib.Path(second_model_dir)
-    print("Predict_test: ",predict_test)
+    print("Predict_test: ", predict_test)
     if predict_test:
         result_name = 'predict_test'
     else:
@@ -682,7 +694,7 @@ def evaluate(config_path='./configs/car.fhd.config',
         eval_dataset,
         batch_size=batch_size,
         shuffle=False,
-        num_workers=0,# input_cfg.num_workers,
+        num_workers=0,  # input_cfg.num_workers,
         pin_memory=False,
         collate_fn=merge_second_batch)
 
@@ -717,13 +729,13 @@ def evaluate(config_path='./configs/car.fhd.config',
 
         if pickle_result:
             with torch.no_grad():
-                dt_annos_i, val_losses, _= predict_kitti_to_anno(
+                dt_annos_i, val_losses, _ = predict_kitti_to_anno(
                     net, detection_2d_path, fusion_layer, example, class_names, center_limit_range,
-                    model_cfg.lidar_input,global_set)
-            dt_annos+= dt_annos_i
+                    model_cfg.lidar_input, global_set)
+            dt_annos += dt_annos_i
             val_loss_final = val_loss_final + val_losses
         else:
-            _predict_kitti_to_file(net, detection_2d_path,fusion_layer, example, result_path_step, class_names,
+            _predict_kitti_to_file(net, detection_2d_path, fusion_layer, example, result_path_step, class_names,
                                    center_limit_range, model_cfg.lidar_input)
         bar.print_bar()
         if measure_time:
@@ -731,7 +743,7 @@ def evaluate(config_path='./configs/car.fhd.config',
 
     sec_per_example = len(eval_dataset) / (time.time() - t)
     print(f'generate label finished({sec_per_example:.2f}/s). start eval:')
-    print("validation_loss:", val_loss_final/len(eval_dataloader))
+    print("validation_loss:", val_loss_final / len(eval_dataloader))
     if measure_time:
         print(f"avg example to torch time: {np.mean(prep_example_times) * 1000:.3f} ms")
         print(f"avg prep time: {np.mean(prep_times) * 1000:.3f} ms")
@@ -756,198 +768,6 @@ def evaluate(config_path='./configs/car.fhd.config',
                 pickle.dump(dt_annos, f)
 
 
-def inference_original_input(idx, save_result=False,
-                             config_path='/home/xkx/CLOCs/second/configs/car.fhd.config',
-                             second_model_dir='../model_dir/second_model',
-                             fusion_model_dir='../CLOCs_SecCas_pretrained'):
-    idx_str = str(idx).zfill(6)
-    input_path = f'/home/xkx/kitti/training/velodyne/{idx_str}.bin'
-    i_path = '/home/xkx/kitti/training/image_2/' + idx_str + '.png'
-    config = pipeline_pb2.TrainEvalPipelineConfig()
-    with open(config_path, "r") as f:
-        proto_str = f.read()
-        text_format.Merge(proto_str, config)
-
-    model_cfg = config.model.second
-    detection_2d_path = config.train_config.detection_2d_path
-    center_limit_range = model_cfg.post_center_limit_range
-    voxel_generator = voxel_builder.build(model_cfg.voxel_generator)
-    bv_range = voxel_generator.point_cloud_range[[0, 1, 3, 4]]
-    box_coder = box_coder_builder.build(model_cfg.box_coder)
-    target_assigner_cfg = model_cfg.target_assigner
-    target_assigner = target_assigner_builder.build(target_assigner_cfg,
-                                                    bv_range, box_coder)
-    class_names = target_assigner.classes
-    net = build_inference_net(config_path,second_model_dir)
-    fusion_layer = fusion.fusion()
-    fusion_layer.cuda()
-    net.cuda()
-    torchplus.train.try_restore_latest_checkpoints(fusion_model_dir, [fusion_layer])
-    net.eval()
-    fusion_layer.eval()
-    info = read_kitti_info_val(idx=idx)
-
-    input_pc = np.fromfile(input_path, dtype=np.float32)
-    input_pc = input_pc.reshape(-1, 4)
-
-    example = get_inference_input_dict(config=config,
-                                       voxel_generator=voxel_generator,
-                                       target_assigner=target_assigner,
-                                       info=info,
-                                       points=input_pc,
-                                       i_path=i_path)
-
-    example = example_convert_to_torch(example, torch.float32)
-
-    with torch.no_grad():
-        dt_annos, val_losses, prediction_dicts = predict_kitti_to_anno(
-            net, detection_2d_path, fusion_layer, example, class_names, center_limit_range,
-            model_cfg.lidar_input)
-        prediction_dicts = prediction_dicts[0]
-        print("prediction result: ", prediction_dicts)
-
-    if save_result:
-        save_path = f'/home/xkx/kitti/training/velodyne_masked_dt_results/{idx_str}_original.pkl'
-        with open(save_path, 'wb') as output_file:
-            pickle.dump(prediction_dicts, output_file)
-        print(f"detection results of original {idx_str}.bin have been saved")
-
-
-def inference_masked_input(idx, save_result=False, it_nr=3000, batch_size=8,
-                           config_path='/home/xkx/CLOCs/second/configs/car.fhd.config',
-                           second_model_dir='../model_dir/second_model',
-                           fusion_model_dir='../CLOCs_SecCas_pretrained'
-                           ):
-    idx_str = str(idx).zfill(6)
-    masked_input_path = f'/home/xkx/kitti/training/velodyne_masked/{idx_str}_{it_nr}.pkl'
-    i_path = '/home/xkx/kitti/training/image_2/' + idx_str + '.png'
-    config = pipeline_pb2.TrainEvalPipelineConfig()
-    with open(config_path, "r") as f:
-        proto_str = f.read()
-        text_format.Merge(proto_str, config)
-
-    model_cfg = config.model.second
-    detection_2d_path = config.train_config.detection_2d_path
-    center_limit_range = model_cfg.post_center_limit_range
-    voxel_generator = voxel_builder.build(model_cfg.voxel_generator)
-    bv_range = voxel_generator.point_cloud_range[[0, 1, 3, 4]]
-    box_coder = box_coder_builder.build(model_cfg.box_coder)
-    target_assigner_cfg = model_cfg.target_assigner
-    target_assigner = target_assigner_builder.build(target_assigner_cfg,
-                                                    bv_range, box_coder)
-    class_names = target_assigner.classes
-    net = build_inference_net(config_path,second_model_dir)
-    fusion_layer = fusion.fusion()
-    fusion_layer.cuda()
-    net.cuda()
-    torchplus.train.try_restore_latest_checkpoints(fusion_model_dir, [fusion_layer])
-    net.eval()
-    fusion_layer.eval()
-    info = read_kitti_info_val(idx=idx)
-
-    results = []
-
-    # read masked input from occam
-    with open(masked_input_path, 'rb') as file:
-        data = pickle.load(file)
-    for i in range(it_nr):
-        j, k = i // batch_size, i % batch_size
-        batch_masked_input_pc = data[j]['points']
-        masked_input_pc = batch_masked_input_pc[batch_masked_input_pc[:, 0] == k]
-        masked_input_pc = masked_input_pc[:, 1:]
-        # print(masked_input_pc.shape)
-        example = get_inference_input_dict(config=config,
-                                           voxel_generator=voxel_generator,
-                                           target_assigner=target_assigner,
-                                           info=info,
-                                           points=masked_input_pc,
-                                           i_path=i_path)
-
-        example = example_convert_to_torch(example, torch.float32)
-
-        with torch.no_grad():
-            dt_annos, val_losses, prediction_dicts = predict_kitti_to_anno(
-                net, detection_2d_path, fusion_layer, example, class_names, center_limit_range,
-                model_cfg.lidar_input)
-            prediction_dicts = prediction_dicts[0]
-            # print("prediction_dicts: ", prediction_dicts)
-
-        results.append(prediction_dicts)
-
-    if save_result:
-        save_path = '/home/xkx/kitti/training/velodyne_masked_dt_results/' + idx_str + '_' + str(it_nr) + '.pkl'
-        with open(save_path, 'wb') as output_file:
-            pickle.dump(results, output_file)
-        print(f"detection results of masked {idx_str}.bin have been saved")
-
-
-def get_inference_input_dict(config, voxel_generator, target_assigner, info, points, i_path):
-    rect = info['calib/R0_rect']
-    P2 = info['calib/P2']
-    Trv2c = info['calib/Tr_velo_to_cam']
-    input_cfg = config.eval_input_reader
-    model_cfg = config.model.second
-
-    pil2tensor = transforms.ToTensor()
-    pil_image = Image.open(str(i_path)).convert("RGB")
-    image_pang_bgr = np.array(pil_image)[:, :, [2, 1, 0]]
-    image_pang = image_pang_bgr
-    '''
-    pil2tensor = transforms.ToTensor()
-    pil_image = Image.open(str(i_path))
-    image_pang = pil2tensor(pil_image)
-    '''
-    input_dict = {
-        'points': points,
-        'rect': rect,
-        'Trv2c': Trv2c,
-        'P2': P2,
-        'image_shape': np.array(info["img_shape"], dtype=np.int32),
-        'image_idx': info['image_idx'],
-        'image_path': info['img_path'],
-        'images': image_pang
-        # 'pointcloud_num_features': num_point_features,
-    }
-    # out_size_factor = model_cfg.rpn.layer_strides[0] // model_cfg.rpn.upsample_strides[0]
-
-    example = prep_pointcloud(
-        input_dict=input_dict,
-        root_path=None,
-        voxel_generator=voxel_generator,
-        target_assigner=target_assigner,
-        max_voxels=input_cfg.max_number_of_voxels,
-        class_names=target_assigner.classes,
-        training=False,
-        create_targets=False,
-        shuffle_points=input_cfg.shuffle_points,
-        generate_bev=False,
-        without_reflectivity=model_cfg.without_reflectivity,
-        num_point_features=model_cfg.num_point_features,
-        anchor_area_threshold=input_cfg.anchor_area_threshold,
-        anchor_cache=None,
-        out_size_factor=8,
-        out_dtype=np.float32)
-    example["image_idx"] = info['image_idx']
-    example["image_shape"] = input_dict["image_shape"]
-    example["points"] = points
-    if "anchors_mask" in example:
-        example["anchors_mask"] = example["anchors_mask"].astype(np.uint8)
-    #############
-    # convert example to batched example
-    #############
-    example = merge_second_batch([example])
-    return example
-
-def read_kitti_info_val(idx):
-    file_path = "/home/xkx/kitti/kitti_infos_trainval.pkl"
-    with open(file_path, 'rb') as file:
-        data = pickle.load(file)
-    for item in data:
-        if item.get('image_idx') == idx:
-            return item
-    return IndexError
-
-
 def save_config(config_path, save_path):
     config = pipeline_pb2.TrainEvalPipelineConfig()
     with open(config_path, "r") as f:
@@ -957,8 +777,9 @@ def save_config(config_path, save_path):
     with open(save_path, 'w') as f:
         f.write(ret)
 
+
 # 后处理，接收preds_dict里的大量proposal，返回最终的检测结果
-def predict_v2(net,example, preds_dict):
+def predict_v2(net, example, preds_dict):
     # keys in preds_dict:,  dict_keys(['box_preds', 'cls_preds', 'dir_cls_preds'])
     t = time.time()
     batch_size = example['anchors'].shape[0]
@@ -983,7 +804,7 @@ def predict_v2(net,example, preds_dict):
     batch_cls_preds = batch_cls_preds.view(batch_size, -1,
                                            num_class_with_bg)
     batch_box_preds = net._box_coder.decode_torch(batch_box_preds,
-                                                   batch_anchors)
+                                                  batch_anchors)
     if net._use_direction_classifier:
         batch_dir_preds = preds_dict["dir_cls_preds"]
         batch_dir_preds = batch_dir_preds.view(batch_size, -1, 2)
@@ -1164,6 +985,7 @@ def predict_v2(net,example, preds_dict):
     # 'image_idx'])
     return predictions_dicts
 
+
 def save_example(config_path='../configs/car.fhd.config'):
     config = pipeline_pb2.TrainEvalPipelineConfig()
     with open(config_path, "r") as f:
@@ -1199,7 +1021,7 @@ def save_example(config_path='../configs/car.fhd.config'):
         eval_dataset,
         batch_size=batch_size,
         shuffle=False,
-        num_workers=0,# input_cfg.num_workers,
+        num_workers=0,  # input_cfg.num_workers,
         pin_memory=False,
         collate_fn=merge_second_batch)
 
@@ -1220,7 +1042,479 @@ def save_example(config_path='../configs/car.fhd.config'):
         print(f'Dictionary saved as {full_path}')
 
 
+def occam_evaluation(idx, it_nr=3000, save_result=False,
+                     config_path='/home/xkx/CLOCs/second/configs/car.fhd.config',
+                     second_model_dir='../model_dir/second_model',
+                     fusion_model_dir='../CLOCs_SecCas_pretrained'):
+    idx_str = str(idx).zfill(6)
+    input_path = f'/media/xkx/TOSHIBA/KexuanMaTH/kitti/training/velodyne_croped_by_occam/{idx_str}.bin'
+    i_path = f'/home/xkx/kitti/training/image_2/{idx_str}.png'
+    attr_map_path = f'/media/xkx/TOSHIBA/KexuanMaTH/kitti/training/heat_map/{idx_str}_{it_nr}.pkl'
+    config = pipeline_pb2.TrainEvalPipelineConfig()
+    with open(config_path, "r") as f:
+        proto_str = f.read()
+        text_format.Merge(proto_str, config)
+
+    model_cfg = config.model.second
+    detection_2d_path = config.train_config.detection_2d_path
+    center_limit_range = model_cfg.post_center_limit_range
+    voxel_generator = voxel_builder.build(model_cfg.voxel_generator)
+    bv_range = voxel_generator.point_cloud_range[[0, 1, 3, 4]]
+    box_coder = box_coder_builder.build(model_cfg.box_coder)
+    target_assigner_cfg = model_cfg.target_assigner
+    target_assigner = target_assigner_builder.build(target_assigner_cfg, bv_range, box_coder)
+    class_names = target_assigner.classes
+    net = build_inference_net(config_path, second_model_dir)
+    fusion_layer = fusion.fusion()
+    fusion_layer.cuda()
+    net.cuda()
+    torchplus.train.try_restore_latest_checkpoints(fusion_model_dir, [fusion_layer])
+    net.eval()
+    fusion_layer.eval()
+
+    info = read_kitti_info_val(idx=idx)
+    input_pc = np.fromfile(input_path, dtype=np.float32)
+    input_pc = input_pc.reshape(-1, 4)
+
+    base_det_boxes, base_det_labels, base_det_scores = read_original_dt_results(idx_str)
+    with open(attr_map_path, 'rb') as file:
+        attr_map = pickle.load(file)
+
+    print(f"input_pc.shape after crop: {input_pc.shape}")
+    print(f"attr_map.shape: {attr_map.shape}")
+
+    sorted_points_with_importance = filter_and_sort_points_by_importance(input_pc, base_det_boxes, attr_map)
+    removal_results = progressively_remove_points(input_pc, sorted_points_with_importance)
+
+    visualize_point_cloud_and_bboxes(removal_results[50], [base_det_boxes[0]])
+
+    # results = []
+    #
+    # for percentage, remaining_points in removal_results.items():
+    #     print(f"{percentage}%: {remaining_points.shape}")
+    #
+    #     example = get_inference_input_dict(config=config,
+    #                                        voxel_generator=voxel_generator,
+    #                                        target_assigner=target_assigner,
+    #                                        info=info,
+    #                                        points=remaining_points,
+    #                                        i_path=i_path)
+    #     example = example_convert_to_torch(example, torch.float32)
+    #
+    #     with torch.no_grad():
+    #         dt_annos, val_losses, prediction_dicts = predict_kitti_to_anno(
+    #             net, detection_2d_path, fusion_layer, example, class_names, center_limit_range,
+    #             model_cfg.lidar_input)
+    #         prediction_dicts = prediction_dicts[0]
+    #         results.append(prediction_dicts)
+    #         print("prediction result: ", prediction_dicts['scores'])
+    #
+    # if save_result:
+    #     save_path = f'/media/xkx/TOSHIBA/KexuanMaTH/kitti/training/velodyne_dropped_dt_results/{idx_str}.pkl'
+    #     with open(save_path, 'wb') as output_file:
+    #         pickle.dump(results, output_file)
+    # print(f"detection results of dropped {idx_str}.bin have been saved")
+
+
+def visualize_point_cloud_and_bboxes(input_pc, base_det_boxes):
+    # 创建Open3D点云对象
+    point_cloud = o3d.geometry.PointCloud()
+    point_cloud.points = o3d.utility.Vector3dVector(input_pc[:, :3])
+
+    # 定义用于存储几何体的列表
+    geometries = [point_cloud]
+
+    # 遍历检测框并创建立方体
+    for box in base_det_boxes:
+        # 创建Open3D的OrientedBoundingBox
+        rot_mat = Rotation.from_rotvec([0, 0, box[6]]).as_matrix()
+        bb = o3d.geometry.OrientedBoundingBox(box[:3], rot_mat, box[3:6])
+        bb.color = (1.0, 0.0, 1.0)
+
+        # 将立方体添加到几何体列表
+        geometries.append(bb)
+
+    # Create a visualizer and set the background color
+    vis = o3d.visualization.Visualizer()
+    vis.create_window()
+    for geometry in geometries:
+        vis.add_geometry(geometry)
+
+    # Set the background color
+    vis.get_render_option().background_color = np.ones(3) * 0.25
+    vis.get_render_option().point_size = 4.0
+
+    # Run the visualizer
+    vis.run()
+    vis.destroy_window()
+
+
+def plot_occam_evaluation(y):
+    x = np.arange(0.0, 1.1, 0.1)
+    # 使用 make_interp_spline 进行插值
+    x_new = np.linspace(x.min(), x.max(), 300)  # 生成更多的 x 值
+    spline = make_interp_spline(x, y, k=3)  # k=3 表示三次样条插值
+    y_smooth = spline(x_new)
+
+    # 绘制光滑曲线
+    plt.figure(figsize=(8, 6))
+    plt.plot(x_new, y_smooth, color='b', label='Smooth Curve')
+    plt.scatter(x, y, color='r', marker='o', label='Data Points')  # 标记原始数据点
+    plt.title('Smooth Curve Example')
+    plt.xlabel('X Axis')
+    plt.ylabel('Y Axis')
+    plt.xticks(np.arange(0, 1.1, 0.1))  # 设置 x 轴刻度
+    plt.yticks(np.arange(0.6, 1.1, 0.1))  # 设置 y 轴刻度
+    plt.grid(True, linestyle='--', alpha=0.7)
+    plt.legend()
+
+    # 显示图形
+    plt.show()
+
+
+def filter_and_sort_points_by_importance(input_pc, base_det_boxes, attr_map):
+    """
+    筛选出位于检测框内的点，并根据重要度排序。
+
+    :param input_pc: numpy array, 形状为 (M, 3)，表示 M 个三维点 (x, y, z)。
+    :param base_det_boxes: numpy array, 形状为 (N, 7)，表示 N 个检测框，
+                           每个框由中心点 (cx, cy, cz) 和尺寸 (length, width, height) 定义。
+    :param attr_map: numpy array, 形状为 (N, M)，表示每个检测框内每个点的重要度。
+    :return: list of lists，每个列表包含位于对应检测框内的点及其重要度，并按重要度降序排序。
+    """
+    sorted_points_with_importance = []
+
+    for i, box in enumerate(base_det_boxes):
+        cx, cy, cz, length, width, height, _ = box
+
+        # 计算检测框的边界
+        x_min = cx - length / 2
+        x_max = cx + length / 2
+        y_min = cy - width / 2
+        y_max = cy + width / 2
+        z_min = cz - height / 2
+        z_max = cz + height / 2
+
+        # 找到位于该检测框内的点
+        inside_mask = (
+                (input_pc[:, 0] >= x_min) & (input_pc[:, 0] <= x_max) &
+                (input_pc[:, 1] >= y_min) & (input_pc[:, 1] <= y_max) &
+                (input_pc[:, 2] >= z_min) & (input_pc[:, 2] <= z_max)
+        )
+
+        print(f"number of points in boxes: {sum(inside_mask)}")
+
+        # 提取位于检测框内的点和其对应的重要度
+        points_in_box = input_pc[inside_mask]
+        importance_in_box = attr_map[i, inside_mask]
+
+        # 按重要度降序排序
+        sorted_indices = np.argsort(importance_in_box)[::-1]
+        sorted_points = points_in_box[sorted_indices]
+        sorted_importance = importance_in_box[sorted_indices]
+
+        # 将排序后的点及其重要度组合在一起
+        sorted_points_with_importance.append(list(zip(sorted_points, sorted_importance)))
+
+    # print(f"sorted_points_with_importance: {sorted_points_with_importance}")
+
+    return sorted_points_with_importance
+
+
+def progressively_remove_points(input_pc, sorted_points_with_importance):
+    """
+    逐步移除重要度排在前0%、10%...到100%的点。
+
+    :param input_pc: numpy array, 形状为 (M, 3)，表示 M 个三维点 (x, y, z)。
+    :param sorted_points_with_importance: list of lists，每个列表包含位于对应检测框内的点及其重要度，并按重要度降序排序。
+    :return: dict, key为移除的百分比，value为剩余点的数组。
+    """
+    removal_results = {}
+
+    # 计算需要移除的数量
+    for percent in range(0, 110, 10):
+        remaining_points = input_pc.copy()
+
+        # 从每个检测框开始移除
+        for box_index, points_with_importance in enumerate(sorted_points_with_importance):
+            points_in_box_count = len(points_with_importance)
+            points_to_remove = int(points_in_box_count * (percent / 100))
+
+            sorted_points, _ = zip(*points_with_importance)
+            sorted_points = np.array(sorted_points)
+            mask = np.ones(len(remaining_points), dtype=bool)
+
+            for point in sorted_points[:points_to_remove]:
+                point_indices = np.where((remaining_points == point).all(axis=1))[0]
+                if point_indices.size > 0:
+                    mask[point_indices[0]] = False
+
+            remaining_points = remaining_points[mask]
+
+        removal_results[percent] = remaining_points
+
+    return removal_results
+
+
+def inference_original_and_masked_input(start_idx, end_idx, save_result=False, it_nr=3000, batch_size=8,
+                                        config_path='/home/xkx/CLOCs/second/configs/car.fhd.config',
+                                        second_model_dir='../model_dir/second_model',
+                                        fusion_model_dir='../CLOCs_SecCas_pretrained'
+                                        ):
+    config = pipeline_pb2.TrainEvalPipelineConfig()
+    with open(config_path, "r") as f:
+        proto_str = f.read()
+        text_format.Merge(proto_str, config)
+
+    model_cfg = config.model.second
+    detection_2d_path = config.train_config.detection_2d_path
+    center_limit_range = model_cfg.post_center_limit_range
+    voxel_generator = voxel_builder.build(model_cfg.voxel_generator)
+    bv_range = voxel_generator.point_cloud_range[[0, 1, 3, 4]]
+    box_coder = box_coder_builder.build(model_cfg.box_coder)
+    target_assigner_cfg = model_cfg.target_assigner
+    target_assigner = target_assigner_builder.build(target_assigner_cfg,
+                                                    bv_range, box_coder)
+    class_names = target_assigner.classes
+    net = build_inference_net(config_path, second_model_dir)
+    fusion_layer = fusion.fusion()
+    fusion_layer.cuda()
+    net.cuda()
+    torchplus.train.try_restore_latest_checkpoints(fusion_model_dir, [fusion_layer])
+    net.eval()
+    fusion_layer.eval()
+
+    for idx in range(start_idx, end_idx):
+        idx_str = str(idx).zfill(6)
+        input_path = f'/media/xkx/TOSHIBA/KexuanMaTH/kitti/training/velodyne_croped_by_occam/{idx_str}.bin'
+        masked_input_path = f'/media/xkx/TOSHIBA/KexuanMaTH/kitti/training/velodyne_masked_pointcloud/{idx_str}_{it_nr}.pkl'
+        i_path = '/home/xkx/kitti/training/image_2/' + idx_str + '.png'
+
+        info = read_kitti_info_val(idx=idx)
+        input_pc = np.fromfile(input_path, dtype=np.float32)
+        input_pc = input_pc.reshape(-1, 4)
+        print(f"input_pc.shape: {input_pc.shape}")
+
+        example_original = get_inference_input_dict(config=config,
+                                                    voxel_generator=voxel_generator,
+                                                    target_assigner=target_assigner,
+                                                    info=info,
+                                                    points=input_pc,
+                                                    i_path=i_path)
+
+        example_original = example_convert_to_torch(example_original, torch.float32)
+
+        with torch.no_grad():
+            dt_annos, val_losses, prediction_dicts = predict_kitti_to_anno(
+                net, detection_2d_path, fusion_layer, example_original, class_names, center_limit_range,
+                model_cfg.lidar_input)
+            prediction_dicts = prediction_dicts[0]
+            print("original prediction result: ", prediction_dicts)
+
+        if save_result:
+            save_path = f'/media/xkx/TOSHIBA/KexuanMaTH/kitti/training/velodyne_original_dt_results/{idx_str}_original.pkl'
+            with open(save_path, 'wb') as output_file:
+                pickle.dump(prediction_dicts, output_file)
+            print(f"detection results of original {idx_str}.bin have been saved")
+
+        results = []
+
+        # read masked input from occam
+        with open(masked_input_path, 'rb') as file:
+            data = pickle.load(file)
+        for i in range(it_nr):
+            j, k = i // batch_size, i % batch_size
+            batch_masked_input_pc = data[j]['points']
+            masked_input_pc = batch_masked_input_pc[batch_masked_input_pc[:, 0] == k]
+            masked_input_pc = masked_input_pc[:, 1:]
+            # print(masked_input_pc.shape)
+            example = get_inference_input_dict(config=config,
+                                               voxel_generator=voxel_generator,
+                                               target_assigner=target_assigner,
+                                               info=info,
+                                               points=masked_input_pc,
+                                               i_path=i_path)
+
+            example = example_convert_to_torch(example, torch.float32)
+
+            with torch.no_grad():
+                dt_annos, val_losses, prediction_dicts = predict_kitti_to_anno(
+                    net, detection_2d_path, fusion_layer, example, class_names, center_limit_range,
+                    model_cfg.lidar_input)
+                prediction_dicts = prediction_dicts[0]
+                # print("prediction_dicts: ", prediction_dicts)
+
+            results.append(prediction_dicts)
+
+        if save_result:
+            save_path = f'/media/xkx/TOSHIBA/KexuanMaTH/kitti/training/velodyne_masked_dt_results/{idx_str}_{it_nr}.pkl'
+            with open(save_path, 'wb') as output_file:
+                pickle.dump(results, output_file)
+            print(f"detection results of masked {idx_str}.bin have been saved")
+
+
+def get_inference_input_dict(config, voxel_generator, target_assigner, info, points, i_path):
+    rect = info['calib/R0_rect']
+    P2 = info['calib/P2']
+    Trv2c = info['calib/Tr_velo_to_cam']
+    input_cfg = config.eval_input_reader
+    model_cfg = config.model.second
+
+    pil2tensor = transforms.ToTensor()
+    pil_image = Image.open(str(i_path)).convert("RGB")
+    image_pang_bgr = np.array(pil_image)[:, :, [2, 1, 0]]
+    image_pang = image_pang_bgr
+    '''
+    pil2tensor = transforms.ToTensor()
+    pil_image = Image.open(str(i_path))
+    image_pang = pil2tensor(pil_image)
+    '''
+    input_dict = {
+        'points': points,
+        'rect': rect,
+        'Trv2c': Trv2c,
+        'P2': P2,
+        'image_shape': np.array(info["img_shape"], dtype=np.int32),
+        'image_idx': info['image_idx'],
+        'image_path': info['img_path'],
+        'images': image_pang
+        # 'pointcloud_num_features': num_point_features,
+    }
+    # out_size_factor = model_cfg.rpn.layer_strides[0] // model_cfg.rpn.upsample_strides[0]
+
+    example = prep_pointcloud(
+        input_dict=input_dict,
+        root_path=None,
+        voxel_generator=voxel_generator,
+        target_assigner=target_assigner,
+        max_voxels=input_cfg.max_number_of_voxels,
+        class_names=target_assigner.classes,
+        training=False,
+        create_targets=False,
+        shuffle_points=input_cfg.shuffle_points,
+        generate_bev=False,
+        without_reflectivity=model_cfg.without_reflectivity,
+        num_point_features=model_cfg.num_point_features,
+        anchor_area_threshold=input_cfg.anchor_area_threshold,
+        anchor_cache=None,
+        out_size_factor=8,
+        out_dtype=np.float32)
+    example["image_idx"] = info['image_idx']
+    example["image_shape"] = input_dict["image_shape"]
+    example["points"] = points
+    if "anchors_mask" in example:
+        example["anchors_mask"] = example["anchors_mask"].astype(np.uint8)
+    #############
+    # convert example to batched example
+    #############
+    example = merge_second_batch([example])
+    return example
+
+
+def read_kitti_info_val(idx):
+    file_path = "/home/xkx/kitti/kitti_infos_trainval.pkl"
+    with open(file_path, 'rb') as file:
+        data = pickle.load(file)
+    for item in data:
+        if item.get('image_idx') == idx:
+            return item
+    return IndexError
+
+
+def inference_masked_input(idx, save_result=False, it_nr=3000, batch_size=8,
+                           config_path='/home/xkx/CLOCs/second/configs/car.fhd.config',
+                           second_model_dir='../model_dir/second_model',
+                           fusion_model_dir='../CLOCs_SecCas_pretrained'
+                           ):
+    idx_str = str(idx).zfill(6)
+    masked_input_path = f'/media/xkx/TOSHIBA/KexuanMaTH/kitti/training/velodyne_masked_pointcloud/{idx_str}_{it_nr}.pkl'
+    i_path = '/home/xkx/kitti/training/image_2/' + idx_str + '.png'
+    config = pipeline_pb2.TrainEvalPipelineConfig()
+    with open(config_path, "r") as f:
+        proto_str = f.read()
+        text_format.Merge(proto_str, config)
+
+    model_cfg = config.model.second
+    detection_2d_path = config.train_config.detection_2d_path
+    center_limit_range = model_cfg.post_center_limit_range
+    voxel_generator = voxel_builder.build(model_cfg.voxel_generator)
+    bv_range = voxel_generator.point_cloud_range[[0, 1, 3, 4]]
+    box_coder = box_coder_builder.build(model_cfg.box_coder)
+    target_assigner_cfg = model_cfg.target_assigner
+    target_assigner = target_assigner_builder.build(target_assigner_cfg,
+                                                    bv_range, box_coder)
+    class_names = target_assigner.classes
+    net = build_inference_net(config_path, second_model_dir)
+    fusion_layer = fusion.fusion()
+    fusion_layer.cuda()
+    net.cuda()
+    torchplus.train.try_restore_latest_checkpoints(fusion_model_dir, [fusion_layer])
+    net.eval()
+    fusion_layer.eval()
+    info = read_kitti_info_val(idx=idx)
+
+    results = []
+
+    # read masked input from occam
+    with open(masked_input_path, 'rb') as file:
+        data = pickle.load(file)
+    for i in range(it_nr):
+        j, k = i // batch_size, i % batch_size
+        batch_masked_input_pc = data[j]['points']
+        masked_input_pc = batch_masked_input_pc[batch_masked_input_pc[:, 0] == k]
+        masked_input_pc = masked_input_pc[:, 1:]
+        # print(masked_input_pc.shape)
+        example = get_inference_input_dict(config=config,
+                                           voxel_generator=voxel_generator,
+                                           target_assigner=target_assigner,
+                                           info=info,
+                                           points=masked_input_pc,
+                                           i_path=i_path)
+
+        example = example_convert_to_torch(example, torch.float32)
+
+        with torch.no_grad():
+            dt_annos, val_losses, prediction_dicts = predict_kitti_to_anno(
+                net, detection_2d_path, fusion_layer, example, class_names, center_limit_range,
+                model_cfg.lidar_input)
+            prediction_dicts = prediction_dicts[0]
+            # print("prediction_dicts: ", prediction_dicts)
+
+        results.append(prediction_dicts)
+
+    if save_result:
+        save_path = '/home/xkx/kitti/training/velodyne_masked_dt_results/' + idx_str + '_' + str(it_nr) + '.pkl'
+        with open(save_path, 'wb') as output_file:
+            pickle.dump(results, output_file)
+        print(f"detection results of masked {idx_str}.bin have been saved")
+
+    print(f"time: {time.time()}")
+
+
+def read_original_dt_results(idx_str):
+    #read_path = f'/home/xkx/kitti/training/velodyne_masked_dt_results/{source_file_path[-10: -4]}_original.pkl'
+    read_path = f'/media/xkx/TOSHIBA/KexuanMaTH/kitti/training/velodyne_original_dt_results/{idx_str}_original.pkl'
+    with open(read_path, 'rb') as file:
+        data = pickle.load(file)
+    pred_boxes = data["box3d_lidar"]
+    pred_boxes[:, [3, 4]] = pred_boxes[:, [4, 3]]
+    pred_scores = data["scores"]
+    pred_labels = data["label_preds"] + 1
+
+    pred_boxes = pred_boxes.cpu().numpy()
+    pred_scores = pred_scores.cpu().numpy()
+    pred_labels = pred_labels.cpu().numpy()
+
+    for i in range(pred_boxes.shape[0]):
+        pred_boxes[i, 6] = -pred_boxes[i, 6] - np.pi / 2
+        pred_boxes[i, 2] = pred_boxes[i, 2] + pred_boxes[i, 5] / 2
+
+    print(f"Successfully read original detection results from {read_path}")
+
+    return pred_boxes, pred_labels, pred_scores
+
+
 if __name__ == '__main__':
     fire.Fire()
+    # occam_evaluation(7)
     # save_example()
-
