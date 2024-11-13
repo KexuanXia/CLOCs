@@ -1,3 +1,9 @@
+"""
+    This train.py was the main function of CLOCs.
+    I added some new functions.
+"""
+
+
 import os
 import pathlib
 import pickle
@@ -50,7 +56,8 @@ warnings.filterwarnings('ignore')
 # predict_kitti_to_anno：在生成预测结果后，还会进行评估和注释数据生成。
 # _predict_kitti_to_file：在生成预测结果后，直接将结果保存为文件。
 
-# 将输入字典中的值转换为PyTorch的张量，并根据键名对数据类型进行处理。
+# Convert the values in the input dictionary to PyTorch tensors and process the data types
+# according to the key names.
 def example_convert_to_torch(example, dtype=torch.float32,
                              device=None) -> dict:
     device = device or torch.device("cuda:0")
@@ -74,7 +81,8 @@ def example_convert_to_torch(example, dtype=torch.float32,
     return example_torch
 
 
-# 通过加载配置文件和预训练模型，初始化各个组件，最终构建并返回一个准备好的用于推理的三维目标检测模型。
+# By loading the configuration file and pre-trained model, initializing each component,
+# and finally building and returning a 3D object detection model ready for reasoning.
 def build_inference_net(config_path,
                         model_dir,
                         result_path=None,
@@ -123,7 +131,8 @@ def build_inference_net(config_path,
     return net
 
 
-# 将输入数据经过神经网络模型和融合层处理，生成3D目标检测结果，并按照KITTI数据集的格式保存到文件中。
+# The input data is processed by the neural network model and fusion layer to generate 3D object
+# detection results and save them to a file in the format of the KITTI dataset.
 def _predict_kitti_to_file(net,
                            detection_2d_path,
                            fusion_layer,
@@ -194,7 +203,11 @@ def _predict_kitti_to_file(net,
             f.write(result_str)
 
 
-# 从模型的预测结果生成KITTI格式的注释数据。该函数通过前向传播生成3D检测结果，计算分类损失，并将最终的检测结果转换为KITTI格式的注释。
+# Generate annotation data in KITTI format from the model's prediction results. This function generates 3D detection
+# results through forward propagation, calculates classification loss, and converts the final detection results into
+# KITTI format annotations.
+# Added parameter flag_2d. When true, directly accept the file path of 2d detection results.
+# The default is false.
 def predict_kitti_to_anno(net,
                           detection_2d_path,
                           fusion_layer,
@@ -202,7 +215,8 @@ def predict_kitti_to_anno(net,
                           class_names,
                           center_limit_range=None,
                           lidar_input=False,
-                          global_set=None):
+                          global_set=None,
+                          flag_2d=False):
     focal_loss_val = SigmoidFocalClassificationLoss()
     batch_image_shape = example['image_shape']
     batch_imgidx = example['image_idx']
@@ -218,7 +232,7 @@ def predict_kitti_to_anno(net,
      all_3d_output,
      top_predictions,
      fusion_input,
-     torch_index) = net(example, detection_2d_path)
+     torch_index) = net(example, detection_2d_path, flag_2d)
     # print("all_3d_output_camera_dict: ", all_3d_output_camera_dict)
     # print("all_3d_output: ", all_3d_output)
     # print("top_predictions: ", top_predictions)
@@ -336,6 +350,7 @@ def predict_kitti_to_anno(net,
     return annos, cls_losses_reduced, predictions_dicts
 
 
+# evaluate the accuracy on KITTI evaluation set
 def evaluate(config_path='./configs/car.fhd.config',
              second_model_dir='/home/xkx/CLOCs/model_dir/second_model',
              fusion_model_dir='../CLOCs_SecCas_pretrained',
@@ -492,7 +507,7 @@ def save_config(config_path, save_path):
         f.write(ret)
 
 
-# 后处理，接收preds_dict里的大量proposal，返回最终的检测结果
+# Post-processing, receiving a large number of proposals in preds_dict, and returning the final detection results
 def predict_v2(net, example, preds_dict):
     # keys in preds_dict:,  dict_keys(['box_preds', 'cls_preds', 'dir_cls_preds'])
     t = time.time()
@@ -643,6 +658,7 @@ def predict_v2(net, example, preds_dict):
                 selected_dir_labels = dir_labels[selected]
             selected_labels = top_labels[selected]
             selected_scores = top_scores[selected]
+
         # finally generate predictions.
         if selected_boxes.shape[0] != 0:
             box_preds = selected_boxes
@@ -656,6 +672,7 @@ def predict_v2(net, example, preds_dict):
                     opp_labels,
                     torch.tensor(np.pi).type_as(box_preds),
                     torch.tensor(0.0).type_as(box_preds))
+            # final_box_preds is detection result in 3d lidar coordinate
             final_box_preds = box_preds
             final_scores = scores
             final_labels = label_preds
@@ -673,6 +690,11 @@ def predict_v2(net, example, preds_dict):
             # box_corners_in_image: [N, 8, 2]
             minxy = torch.min(box_corners_in_image, dim=1)[0]
             maxxy = torch.max(box_corners_in_image, dim=1)[0]
+            # Steps to get the 2d bbox:
+            # 1. bbox in 3d lidar coordinate from NN
+            # 2. convert the bbox in 3d lidar into 3d camera coordinate and calculate the 8 corners
+            # 3. project corners to 2d pixel coordinate
+            # 4. find the min and max values of these 8 corners
             box_2d_preds = torch.cat([minxy, maxxy], dim=1)
             # predictions
             predictions_dict = {
@@ -756,6 +778,10 @@ def save_example(config_path='../configs/car.fhd.config'):
         print(f'Dictionary saved as {full_path}')
 
 
+# inference with CLOCs late fusion model
+# run 3001 times
+# one time for original, namely no perturbation
+# 3000 times for masked point cloud
 def inference_original_and_masked_input(start_idx, end_idx, save_result=False, it_nr=3000, batch_size=8,
                                         config_path='/home/xkx/CLOCs/second/configs/car.fhd.config',
                                         second_model_dir='../model_dir/second_model',
@@ -787,7 +813,6 @@ def inference_original_and_masked_input(start_idx, end_idx, save_result=False, i
     for idx in range(start_idx, end_idx):
         idx_str = str(idx).zfill(6)
         input_path = f'/media/xkx/TOSHIBA/KexuanMaTH/kitti/training/velodyne_croped_by_occam/{idx_str}.bin'
-        masked_input_path = f'/media/xkx/TOSHIBA/KexuanMaTH/kitti/training/velodyne_masked_pointcloud/{idx_str}_{it_nr}.pkl'
         i_path = '/home/xkx/kitti/training/image_2/' + idx_str + '.png'
 
         info = read_kitti_info_val(idx=idx)
@@ -818,8 +843,10 @@ def inference_original_and_masked_input(start_idx, end_idx, save_result=False, i
             print(f"detection results of original {idx_str}.bin have been saved")
 
         results = []
-
+        num = 0
         # read masked input from occam
+        masked_input_path = f'/media/xkx/TOSHIBA/KexuanMaTH/kitti/training/velodyne_masked_pointcloud_2/{idx_str}_{it_nr}.pkl'
+
         with open(masked_input_path, 'rb') as file:
             data = pickle.load(file)
         for i in range(it_nr):
@@ -843,11 +870,9 @@ def inference_original_and_masked_input(start_idx, end_idx, save_result=False, i
                     model_cfg.lidar_input)
                 prediction_dicts = prediction_dicts[0]
                 # print("prediction_dicts: ", prediction_dicts)
-
             results.append(prediction_dicts)
-
         if save_result:
-            save_path = f'/media/xkx/TOSHIBA/KexuanMaTH/kitti/training/velodyne_masked_dt_results/{idx_str}_{it_nr}.pkl'
+            save_path = f'/media/xkx/TOSHIBA/KexuanMaTH/kitti/training/velodyne_masked_dt_results_2/{idx_str}_{it_nr}.pkl'
             with open(save_path, 'wb') as output_file:
                 pickle.dump(results, output_file)
             print(f"detection results of masked {idx_str}.bin have been saved")
@@ -921,6 +946,71 @@ def read_kitti_info_val(idx):
     return IndexError
 
 
+def inference_original_input(start_idx, end_idx, save_result=False,
+                             config_path='/home/xkx/CLOCs/second/configs/car.fhd.config',
+                             second_model_dir='../model_dir/second_model',
+                             fusion_model_dir='../CLOCs_SecCas_pretrained'
+                             ):
+    config = pipeline_pb2.TrainEvalPipelineConfig()
+    with open(config_path, "r") as f:
+        proto_str = f.read()
+        text_format.Merge(proto_str, config)
+
+    # detection_2d_path = config.train_config.detection_2d_path
+    model_cfg = config.model.second
+    center_limit_range = model_cfg.post_center_limit_range
+    voxel_generator = voxel_builder.build(model_cfg.voxel_generator)
+    bv_range = voxel_generator.point_cloud_range[[0, 1, 3, 4]]
+    box_coder = box_coder_builder.build(model_cfg.box_coder)
+    target_assigner_cfg = model_cfg.target_assigner
+    target_assigner = target_assigner_builder.build(target_assigner_cfg,
+                                                    bv_range, box_coder)
+    class_names = target_assigner.classes
+    net = build_inference_net(config_path, second_model_dir)
+    fusion_layer = fusion.fusion()
+    fusion_layer.cuda()
+    net.cuda()
+    torchplus.train.try_restore_latest_checkpoints(fusion_model_dir, [fusion_layer])
+    net.eval()
+    fusion_layer.eval()
+
+    for idx in range(start_idx, end_idx):
+        idx_str = str(idx).zfill(6)
+        input_path = f'/media/xkx/TOSHIBA/KexuanMaTH/kitti/training/velodyne_croped_by_occam/{idx_str}.bin'
+        i_path = '/home/xkx/kitti/training/image_2/' + idx_str + '.png'
+
+        info = read_kitti_info_val(idx=idx)
+        input_pc = np.fromfile(input_path, dtype=np.float32)
+        input_pc = input_pc.reshape(-1, 4)
+        print(f"input_pc.shape: {input_pc.shape}")
+
+        example_original = get_inference_input_dict(config=config,
+                                                    voxel_generator=voxel_generator,
+                                                    target_assigner=target_assigner,
+                                                    info=info,
+                                                    points=input_pc,
+                                                    i_path=i_path)
+
+        example_original = example_convert_to_torch(example_original, torch.float32)
+
+        ################################################## modify!!!!!!
+        detection_2d_path = f'/media/xkx/TOSHIBA/KexuanMaTH/kitti/training/{idx_str}.txt'
+        print(f"detection 2d: {detection_2d_path}")
+        with torch.no_grad():
+            dt_annos, val_losses, prediction_dicts = predict_kitti_to_anno(
+                net, detection_2d_path, fusion_layer, example_original, class_names, center_limit_range,
+                model_cfg.lidar_input, flag_2d=False)
+            prediction_dicts = prediction_dicts[0]
+            print("original prediction result: ", prediction_dicts)
+
+        if save_result:
+            save_path = f'/media/xkx/TOSHIBA/KexuanMaTH/kitti/training/velodyne_original_dt_results/{idx_str}_original.pkl'
+            with open(save_path, 'wb') as output_file:
+                pickle.dump(prediction_dicts, output_file)
+            print(f"detection results of original {idx_str}.bin have been saved")
+
 
 if __name__ == '__main__':
-    fire.Fire()
+    # fire.Fire()
+    # inference_original_input(8, 9)
+    inference_original_and_masked_input(1, 2, save_result=False)

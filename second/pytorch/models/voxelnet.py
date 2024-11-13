@@ -277,7 +277,7 @@ class VoxelNet(nn.Module):
     def get_global_step(self):
         return int(self.global_step.cpu().numpy()[0])
 
-    def forward(self, example, detection_2d_path):
+    def forward(self, example, detection_2d_path, flag_2d=False):
         """module's forward should always accept dict and return loss.
         """
         voxels = example["voxels"]
@@ -391,8 +391,11 @@ class VoxelNet(nn.Module):
         else:
             self.start_timer("predict")
             img_idx = example['image_idx'][0]
-            detection_2d_result_path = pathlib.Path(detection_2d_path)
-            detection_2d_file_name = f"{detection_2d_result_path}/{kitti.get_image_index_str(img_idx)}.txt"
+            if flag_2d:
+                detection_2d_file_name = detection_2d_path
+            else:
+                detection_2d_result_path = pathlib.Path(detection_2d_path)
+                detection_2d_file_name = f"{detection_2d_result_path}/{kitti.get_image_index_str(img_idx)}.txt"
             with open(detection_2d_file_name, 'r') as f:
                 lines = f.readlines()
             content = [line.strip().split(' ') for line in lines]
