@@ -84,9 +84,6 @@ class TorchInferenceContext(InferenceContext):
         else:
             float_dtype = torch.float32
         example_torch = example_convert_to_torch(example, float_dtype)
-        # 这里原来是与second里面的代码一模一样的，但是cloc更改了predict_kitti_to_anno的入参，
-        # 因此这里尝试修改了result_annos
-        # 可视化效果很差的原因应该在这里，还未修改
         # result_annos = predict_kitti_to_anno(
         #     self.net, example_torch, list(
         #         self.target_assigner.classes),
